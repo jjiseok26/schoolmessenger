@@ -1,0 +1,54 @@
+{
+  "name": "school-messenger-server",
+  "version": "0.8.0",
+  "description": "학교 메신저 서버 - 교내망용 메시지 서버 및 관리 도구",
+  "main": "main.js",
+  "author": "School Messenger",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "kr.school.messenger.server",
+    "productName": "SchoolMessengerServer",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "ui/**/*",
+      "icon.ico",
+      "icon.png"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "학교메신저 서버",
+      "artifactName": "SchoolMessenger-Server-Setup-${version}.${ext}"
+    }
+  }
+}

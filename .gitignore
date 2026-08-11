@@ -1,0 +1,17 @@
+# 의존성
+node_modules/
+
+# 로컬 개인 설정 (PC별 경로 포함)
+.claude/settings.local.json
+
+# 빌드 산출물 (설치파일은 용량이 커서 저장소에 넣지 않음)
+dist/
+
+# 로그/임시
+*.log
+npm-debug.log*
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

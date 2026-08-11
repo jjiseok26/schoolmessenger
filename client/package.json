@@ -1,0 +1,49 @@
+{
+  "name": "school-messenger-client",
+  "version": "0.8.0",
+  "description": "학교 메신저 - 교직원용 메신저 클라이언트",
+  "main": "main.js",
+  "author": "School Messenger",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "kr.school.messenger.client",
+    "productName": "학교메신저",
+    "executableName": "SchoolMessenger",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "ui/**/*",
+      "icon.ico",
+      "icon.png"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "학교메신저",
+      "artifactName": "SchoolMessenger-Client-Setup-${version}.${ext}"
+    }
+  }
+}
