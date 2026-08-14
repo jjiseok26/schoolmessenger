@@ -231,11 +231,17 @@ window.api.getAutostart().then(on => { $('#autostartChk').checked = on; });
 async function renderDeptOrder() {
   const users = await window.api.getUsers();
   const saved = await window.api.getDeptOrder();
+  const extra = await window.api.getExtraDepts();
   const counts = new Map();
   for (const u of users) {
     if (u.id === 'admin') continue;
-    counts.set(u.dept, (counts.get(u.dept) || 0) + 1);
+    // 다중 부서 소속을 모두 반영
+    for (const d of (u.depts && u.depts.length ? u.depts : [u.dept])) {
+      counts.set(d, (counts.get(d) || 0) + 1);
+    }
   }
+  // 클라이언트에서 추가한 빈 부서(소속 인원 0명)도 순서를 조정할 수 있게 포함
+  for (const d of extra) if (!counts.has(d)) counts.set(d, 0);
   const depts = [...counts.keys()];
   // 저장된 순서 우선, 새로 생긴 부서는 뒤에 가나다순
   const ordered = [
@@ -250,7 +256,7 @@ async function renderDeptOrder() {
     row.draggable = true;
     row.title = '드래그해서 순서를 바꿀 수 있습니다';
     row.innerHTML = `<span class="do-grip">⠿</span><span class="do-name">${i + 1}. ${esc(d)}</span>
-      <span class="do-cnt">${counts.get(d)}명</span>
+      <span class="do-cnt">${counts.get(d) ? counts.get(d) + '명' : '비어 있음'}</span>
       <button data-dir="-1" ${i === 0 ? 'disabled' : ''}>▲</button>
       <button data-dir="1" ${i === ordered.length - 1 ? 'disabled' : ''}>▼</button>`;
     row.querySelectorAll('button').forEach(b => b.onclick = async () => {

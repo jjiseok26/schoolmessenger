@@ -97,7 +97,7 @@ const S = {
   ws: null, loggedIn: false, intentionalClose: false,
   aesKey: null, recvChain: Promise.resolve(), sendChain: Promise.resolve(),
   tab: 'notice', chatPeer: null,
-  recipients: new Set(), composeFileList: [],
+  recipients: new Set(), composeFileList: [], draftTimer: null,
   roomPick: new Set(), roomModalMode: 'create',
   closedDepts: new Set(),
   reconnectTimer: null
@@ -603,10 +603,11 @@ function handleDeptDrop(targetFull, e) {
   if (data.startsWith('D|')) {
     const dragged = data.slice(2).split('||').filter(Boolean);
     if (dragged.includes(targetFull)) return;
-    const flat = S.deptFlat.filter(d => !dragged.includes(d));
+    // 과목으로 자동 생성되는 교과 조직은 순서 목록에서 제외 (항상 맨 뒤에 표시됨)
+    const flat = S.deptFlat.filter(d => !dragged.includes(d) && !S.derivedDepts.has(d));
     let ti = flat.indexOf(targetFull);
     if (ti < 0) ti = flat.length;
-    flat.splice(ti, 0, ...dragged);
+    flat.splice(ti, 0, ...dragged.filter(d => !S.derivedDepts.has(d)));
     send({ type: 'set_dept_order', order: flat });
   } else if (data.startsWith('U|')) {
     const [, uid, fromDept] = data.split('|');
@@ -718,7 +719,10 @@ function buildUserRow(u, dept, level) {
     ev.preventDefault();
     ev.stopPropagation();
     const data = ev.dataTransfer.getData('text/plain');
-    if (!data || !data.startsWith('U|')) return;
+    if (!data) return;
+    // 부서를 사용자 행에 놓으면 그 사용자가 속한 부서 위치로 이동 (헤더가 얇아 조준이 어려움)
+    if (data.startsWith('D|')) return handleDeptDrop(dept, ev);
+    if (!data.startsWith('U|')) return;
     const [, dragId, fromDept] = data.split('|');
     if (dragId === u.id) return;
     if (fromDept === dept) {
@@ -1856,6 +1860,33 @@ function addComposeFiles(files) {
   renderComposeFiles();
 }
 
+// ---- 쪽지 임시저장 (받는사람·본문·예약 시각을 자동 보관, 첨부파일은 제외) ----
+const draftKey = () => 'compose-draft:' + S.server + ':' + S.id;
+
+function saveDraft() {
+  if ($('#composeModal').style.display === 'none') return;
+  const html = $('#composeText').innerHTML;
+  const to = [...S.recipients];
+  // 내용도 받는사람도 없으면 저장하지 않음
+  if (!$('#composeText').innerText.trim() && !to.length && !$('#composeText').querySelector('img')) {
+    return localStorage.removeItem(draftKey());
+  }
+  localStorage.setItem(draftKey(), JSON.stringify({
+    to, html,
+    schedOn: $('#schedChk').checked, schedTime: $('#schedTime').value,
+    time: Date.now()
+  }));
+  $('#draftInfo').textContent = '💾 임시저장됨 ' + fmtTime(Date.now());
+}
+
+function loadDraft() {
+  try { return JSON.parse(localStorage.getItem(draftKey())); } catch (e) { return null; }
+}
+function clearDraft() {
+  localStorage.removeItem(draftKey());
+  $('#draftInfo').textContent = '';
+}
+
 function openCompose(preset, prefillText, carryAttachments, prefillHtml) {
   S.recipients = new Set(preset || []);
   S.composeCarry = carryAttachments || [];
@@ -1874,6 +1905,29 @@ function openCompose(preset, prefillText, carryAttachments, prefillHtml) {
   renderRecipients();
   renderPicker();
   $('#composeModal').style.display = 'flex';
+  $('#draftInfo').textContent = '';
+
+  // 새 쪽지(전달/답장이 아닌 경우)에 임시저장이 있으면 복원 여부 확인
+  const d = loadDraft();
+  const isNew = !preset && !prefillText && !prefillHtml && !(carryAttachments || []).length;
+  if (isNew && d && (d.html || (d.to || []).length)) {
+    if (confirm(`작성 중이던 쪽지가 있습니다. (${fmtFull(d.time)})\n이어서 작성할까요?`)) {
+      S.recipients = new Set((d.to || []).filter(id => userById(id)));
+      $('#composeText').innerHTML = d.html || '';
+      if (d.schedOn) {
+        $('#schedChk').checked = true;
+        $('#schedTime').style.display = '';
+        $('#schedTime').value = d.schedTime || '';
+      }
+      renderRecipients();
+      renderPicker();
+      $('#draftInfo').textContent = '💾 임시저장 내용을 불러왔습니다';
+    } else clearDraft();
+  }
+
+  // 자동 임시저장 (10초 간격 + 입력 시)
+  clearInterval(S.draftTimer);
+  S.draftTimer = setInterval(saveDraft, 10000);
   $('#composeText').focus();
 }
 
@@ -1984,7 +2038,24 @@ $('#schedChk').addEventListener('change', (e) => {
 });
 
 $('#composeBtn').addEventListener('click', () => openCompose());
-$('#composeCancel').addEventListener('click', () => { $('#composeModal').style.display = 'none'; });
+$('#composeCancel').addEventListener('click', () => {
+  saveDraft(); // 실수로 닫아도 내용이 남도록 저장
+  clearInterval(S.draftTimer);
+  $('#composeModal').style.display = 'none';
+});
+// 지금 임시저장하고 닫기
+$('#draftSaveBtn').addEventListener('click', () => {
+  saveDraft();
+  clearInterval(S.draftTimer);
+  $('#composeModal').style.display = 'none';
+  alert('작성 중인 쪽지를 임시저장했습니다.\n다시 [쪽지 보내기]를 열면 이어서 작성할 수 있습니다.');
+});
+// 입력이 멈추면 자동 저장
+let draftDebounce = null;
+$('#composeText').addEventListener('input', () => {
+  clearTimeout(draftDebounce);
+  draftDebounce = setTimeout(saveDraft, 1500);
+});
 $('#composeAddFile').addEventListener('click', () => $('#composeFiles').click());
 $('#composeFiles').addEventListener('change', () => {
   addComposeFiles([...$('#composeFiles').files]);
@@ -2016,6 +2087,8 @@ $('#composeSend').addEventListener('click', async () => {
       sendAt: sendAt || undefined,
       html
     });
+    clearDraft(); // 발송 완료 → 임시저장 삭제
+    clearInterval(S.draftTimer);
     $('#composeModal').style.display = 'none';
   } catch (e) {
     $('#composeError').textContent = e.message;

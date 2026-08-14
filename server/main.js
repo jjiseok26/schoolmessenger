@@ -233,6 +233,7 @@ ipcMain.handle('get-app-version', () => app.getVersion());
 
 // ---------- 부서(그룹) 표시 순서 ----------
 ipcMain.handle('get-dept-order', () => server.getDeptOrder());
+ipcMain.handle('get-extra-depts', () => server.db.settings.extraDepts || []);
 ipcMain.handle('set-dept-order', (e, order) => server.setDeptOrder(order));
 
 // ---------- 학교 이름 ----------

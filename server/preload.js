@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   setSchoolName: (name) => ipcRenderer.invoke('set-school-name', name),
   registerClientUpdate: () => ipcRenderer.invoke('register-client-update'),
   getDeptOrder: () => ipcRenderer.invoke('get-dept-order'),
+  getExtraDepts: () => ipcRenderer.invoke('get-extra-depts'),
   setDeptOrder: (order) => ipcRenderer.invoke('set-dept-order', order),
   getSignups: () => ipcRenderer.invoke('get-signups'),
   approveSignup: (reqId) => ipcRenderer.invoke('approve-signup', reqId),
