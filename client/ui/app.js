@@ -287,8 +287,9 @@ function handleServer(m) {
         $('#loginView').style.display = 'none';
         $('#mainView').style.display = '';
         $('#myInfo').textContent = `${S.me.name} (${S.me.dept}${S.me.position ? ' · ' + S.me.position : ''})`;
-        $('#noticeWriteBtn').style.display = S.me.admin ? '' : 'none';
-        $('#pollWriteBtn').style.display = S.me.admin ? 'none' : ''; // 일반 사용자: 설문만
+        // 공지·설문 모두 누구나 작성 가능
+        $('#noticeWriteBtn').style.display = '';
+        $('#pollWriteBtn').style.display = '';
         $('#orgManageBtn').style.display = S.me.admin ? '' : 'none';
         if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
       }
@@ -1206,9 +1207,13 @@ function renderNotices() {
     };
     list.appendChild(el);
   }
-  const items = [...S.notices].reverse();
+  const nq = ($('#noticeSearch').value || '').trim().toLowerCase();
+  const items = [...S.notices].reverse().filter(n => !nq ||
+    n.title.toLowerCase().includes(nq) ||
+    (n.body || '').toLowerCase().includes(nq) ||
+    (n.authorName || '').toLowerCase().includes(nq));
   if (!items.length && !list.children.length) {
-    list.innerHTML = '<div class="empty">등록된 공지가 없습니다</div>';
+    list.innerHTML = `<div class="empty">${nq ? '검색 결과가 없습니다' : '등록된 공지가 없습니다'}</div>`;
     return;
   }
   for (const n of items) {
@@ -1217,8 +1222,9 @@ function renderNotices() {
     const pollBadge = n.poll
       ? (Date.now() > n.poll.deadline ? ' <span style="color:#c62828">📊마감</span>' : ' <span style="color:#1565c0">📊설문</span>')
       : '';
+    const clipBadge = (n.attachments || []).length ? ' <span class="clip">📎</span>' : '';
     el.innerHTML = `<span class="type-chip tc-notice">공지</span><span class="who">📢 ${esc(n.authorName)}</span>
-      <span class="preview"><b>${esc(n.title)}</b>${pollBadge} — ${esc(n.body.slice(0, 80)) || '(내용 없음)'}</span>
+      <span class="preview"><b>${esc(n.title)}</b>${pollBadge}${clipBadge} — ${esc(n.body.slice(0, 80)) || '(내용 없음)'}</span>
       <span class="when">${fmtTime(n.time)}</span>`;
     el.onclick = () => openNoticeDetail(n);
     // 관리자거나 본인이 작성한 공지는 목록에서 바로 삭제
@@ -1605,6 +1611,7 @@ function openDetail(m, mode) {
   };
   // 전달
   $('#detailForward').style.display = '';
+  $('#detailForward').textContent = '전달';
   $('#detailForward').onclick = () => {
     $('#detailModal').style.display = 'none';
     forwardMessage(m);
@@ -1669,16 +1676,20 @@ function openNoticeDetail(n) {
   S.openNoticeId = n.id;
   $('#detailTitle').textContent = '📢 ' + n.title;
   let meta = `작성자: ${esc(n.authorName)}<br>시각: ${fmtFull(n.time)}`;
+  if (n.edited) meta += `<br><span style="color:#e67e22">✏ 수정됨: ${fmtFull(n.edited)}${n.editedBy ? ' (' + esc(n.editedBy) + ')' : ''}</span>`;
   $('#detailMeta').innerHTML = meta;
   $('#detailPrint').style.display = '';
   $('#detailPrint').onclick = () => printMessage({
     title: '공지사항 — ' + n.title,
     metaHtml: meta,
     bodyHtml: n.body ? linkify(n.body) : '(내용 없음)',
-    files: []
+    files: (n.attachments || []).map(a => `${a.name} (${fmtSize(a.size)})`)
   });
   $('#detailBody').innerHTML = n.body ? linkify(n.body) : '(내용 없음)';
-  $('#detailFiles').innerHTML = n.poll ? pollHtml(n) : '';
+  // 첨부파일 + 설문
+  $('#detailFiles').innerHTML =
+    ((n.attachments || []).length ? attachmentLinks({ attachments: n.attachments }) : '') +
+    (n.poll ? pollHtml(n) : '');
   if (n.poll && Date.now() <= n.poll.deadline) {
     const btn = document.getElementById('pollVoteBtn');
     if (btn) btn.onclick = () => {
@@ -1687,12 +1698,18 @@ function openNoticeDetail(n) {
       send({ type: 'vote_poll', noticeId: n.id, option: Number(sel.value) });
     };
   }
-  $('#detailForward').style.display = 'none';
   $('#detailRecall').style.display = 'none';
   $('#detailDelete').style.display = 'none';
-  const canDel = S.me.admin || n.authorId === S.me.id;
-  $('#detailReply').style.display = canDel ? '' : 'none';
-  $('#detailReply').textContent = canDel ? '공지 삭제' : '답장';
+  // 작성자 본인 또는 관리자는 수정·삭제 가능
+  const canEdit = S.me.admin || n.authorId === S.me.id;
+  $('#detailForward').style.display = canEdit ? '' : 'none';
+  $('#detailForward').textContent = '✏ 수정';
+  $('#detailForward').onclick = () => {
+    $('#detailModal').style.display = 'none';
+    openNoticeModal(false, n);
+  };
+  $('#detailReply').style.display = canEdit ? '' : 'none';
+  $('#detailReply').textContent = canEdit ? '공지 삭제' : '답장';
   $('#detailReply').onclick = () => {
     if (confirm('이 공지를 삭제할까요?')) {
       send({ type: 'delete_notice', noticeId: n.id });
@@ -2125,28 +2142,78 @@ function localDatetimeValue(msFromNow) {
 }
 
 // pollOnly=true면 설문 전용(일반 사용자용): 설문 강제, 예약/설문해제 숨김
-function openNoticeModal(pollOnly) {
-  $('#noticeTitle').value = '';
-  $('#noticeBody').value = '';
-  $('#pollOptions').value = '';
+// 공지 첨부파일 목록 (새로 고른 파일 + 수정 시 기존 첨부)
+function renderNoticeFiles() {
+  const box = $('#noticeFileList');
+  box.innerHTML = '';
+  // 기존(이미 업로드된) 첨부
+  (S.noticeKeepAtts || []).forEach((a, i) => {
+    const row = document.createElement('div');
+    row.className = 'att-row';
+    row.innerHTML = `<span>📎</span><span class="att-name">${esc(a.name)}</span>
+      <span class="att-size">${fmtSize(a.size)}</span><span class="att-del" title="첨부 제거">✕</span>`;
+    row.querySelector('.att-del').onclick = () => { S.noticeKeepAtts.splice(i, 1); renderNoticeFiles(); };
+    box.appendChild(row);
+  });
+  // 새로 추가한 파일
+  (S.noticeFileList || []).forEach((f, i) => {
+    const row = document.createElement('div');
+    row.className = 'att-row';
+    const icon = IMG_EXT.test(f.name) ? '🖼' : VIDEO_EXT.test(f.name) ? '🎬' : '📎';
+    row.innerHTML = `<span>${icon}</span><span class="att-name">${esc(f.name)}</span>
+      <span class="att-size">${fmtSize(f.size)}</span><span class="att-del" title="첨부 제거">✕</span>`;
+    row.querySelector('.att-del').onclick = () => { S.noticeFileList.splice(i, 1); renderNoticeFiles(); };
+    box.appendChild(row);
+  });
+}
+
+function addNoticeFiles(files) {
+  S.noticeFileList = S.noticeFileList || [];
+  for (const f of files) {
+    if (!S.noticeFileList.some(x => x.name === f.name && x.size === f.size)) S.noticeFileList.push(f);
+  }
+  renderNoticeFiles();
+}
+
+// pollOnly=true면 설문 전용, editNotice가 있으면 수정 모드
+function openNoticeModal(pollOnly, editNotice) {
+  const n = editNotice || null;
+  S.editingNoticeId = n ? n.id : null;
+  S.noticeFileList = [];
+  S.noticeKeepAtts = n ? [...(n.attachments || [])] : [];
+  renderNoticeFiles();
+  $('#noticeTitle').value = n ? n.title : '';
+  $('#noticeBody').value = n ? n.body : '';
+  $('#pollOptions').value = n && n.poll ? n.poll.options.join('\n') : '';
   $('#pollDeadline').value = '';
   $('#noticeSchedChk').checked = false;
   $('#noticeSchedTime').style.display = 'none';
   $('#noticeSchedTime').value = '';
   $('#noticeError').textContent = '';
   S.noticePollOnly = !!pollOnly;
-  $('#noticeModalTitle').textContent = pollOnly ? '📊 설문 만들기' : '공지 쓰기';
+  const hasPoll = n ? !!n.poll : !!pollOnly;
+  $('#noticeModalTitle').textContent = n ? '✏ 공지 수정' : (pollOnly ? '📊 설문 만들기' : '공지 쓰기');
   $('#noticeTitle').placeholder = pollOnly ? '설문 제목' : '공지 제목';
-  $('#noticePollChk').checked = pollOnly;
-  $('#noticePollChkRow').style.display = pollOnly ? 'none' : ''; // 설문 전용은 체크박스 숨김(항상 포함)
-  $('#noticePollBox').style.display = pollOnly ? '' : 'none';
-  if (pollOnly) $('#pollDeadline').value = localDatetimeValue(7 * 86400000);
-  $('#noticeSchedChk').closest('.row').style.display = pollOnly ? 'none' : ''; // 설문 전용은 예약 숨김
+  $('#noticePollChk').checked = hasPoll;
+  // 수정 모드에서는 설문 포함 여부를 바꿀 수 없음 (기존 투표 보존)
+  $('#noticePollChkRow').style.display = (pollOnly || n) ? 'none' : '';
+  $('#noticePollBox').style.display = hasPoll ? '' : 'none';
+  $('#pollOptions').disabled = !!n; // 수정 시 항목 변경 불가, 마감 시각만 조정
+  if (n && n.poll) $('#pollDeadline').value = localDatetimeValue(n.poll.deadline - Date.now());
+  else if (pollOnly) $('#pollDeadline').value = localDatetimeValue(7 * 86400000);
+  $('#noticeSchedRow').style.display = (pollOnly || n) ? 'none' : ''; // 설문/수정은 예약 숨김
+  $('#noticePost').textContent = n ? '수정 저장' : '등록';
   $('#noticeModal').style.display = 'flex';
   $('#noticeTitle').focus();
 }
 $('#noticeWriteBtn').addEventListener('click', () => openNoticeModal(false));
 $('#pollWriteBtn').addEventListener('click', () => openNoticeModal(true));
+// 목록 상단 고정 도구 모음
+$('#noticeWriteBtn2').addEventListener('click', () => openNoticeModal(false));
+$('#pollWriteBtn2').addEventListener('click', () => openNoticeModal(true));
+$('#inboxComposeBtn').addEventListener('click', () => openCompose());
+$('#sentComposeBtn').addEventListener('click', () => openCompose());
+$('#noticeSearch').addEventListener('input', () => renderNotices());
 $('#noticePollChk').addEventListener('change', (e) => {
   $('#noticePollBox').style.display = e.target.checked ? '' : 'none';
   if (e.target.checked && !$('#pollDeadline').value) {
@@ -2160,26 +2227,52 @@ $('#noticeSchedChk').addEventListener('change', (e) => {
   }
 });
 $('#noticeCancel').addEventListener('click', () => { $('#noticeModal').style.display = 'none'; });
-$('#noticePost').addEventListener('click', () => {
+$('#noticeAddFile').addEventListener('click', () => $('#noticeFiles').click());
+$('#noticeFiles').addEventListener('change', () => {
+  addNoticeFiles([...$('#noticeFiles').files]);
+  $('#noticeFiles').value = '';
+});
+setupDropZone(document.querySelector('#noticeModal .modal'), (files) => addNoticeFiles(files));
+
+$('#noticePost').addEventListener('click', async () => {
   const title = $('#noticeTitle').value.trim();
   if (!title) return $('#noticeError').textContent = '제목을 입력하세요.';
-  const payload = { type: 'post_notice', title, body: $('#noticeBody').value };
+  const editing = S.editingNoticeId;
+  const payload = editing
+    ? { type: 'edit_notice', noticeId: editing, title, body: $('#noticeBody').value }
+    : { type: 'post_notice', title, body: $('#noticeBody').value };
   if ($('#noticePollChk').checked) {
-    const options = $('#pollOptions').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (options.length < 2) return $('#noticeError').textContent = '설문 항목을 2개 이상 입력하세요.';
     const deadline = new Date($('#pollDeadline').value).getTime();
     if (!deadline || isNaN(deadline) || deadline < Date.now() + 60000)
       return $('#noticeError').textContent = '설문 마감 시각은 최소 1분 이후여야 합니다.';
-    payload.poll = { options, deadline };
+    if (editing) {
+      payload.pollDeadline = deadline; // 수정 시 마감 시각만 조정
+    } else {
+      const options = $('#pollOptions').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (options.length < 2) return $('#noticeError').textContent = '설문 항목을 2개 이상 입력하세요.';
+      payload.poll = { options, deadline };
+    }
   }
-  if ($('#noticeSchedChk').checked) {
+  if (!editing && $('#noticeSchedChk').checked) {
     const publishAt = new Date($('#noticeSchedTime').value).getTime();
     if (!publishAt || isNaN(publishAt) || publishAt < Date.now() + 60000)
       return $('#noticeError').textContent = '예약 시각은 최소 1분 이후여야 합니다.';
     payload.publishAt = publishAt;
   }
-  send(payload);
-  $('#noticeModal').style.display = 'none';
+  // 첨부파일 업로드 후 전송
+  $('#noticePost').disabled = true;
+  try {
+    const files = S.noticeFileList || [];
+    if (files.length) $('#noticeError').textContent = '파일 업로드 중…';
+    const uploaded = files.length ? await uploadFiles(files) : [];
+    payload.attachments = [...(S.noticeKeepAtts || []), ...uploaded];
+    send(payload);
+    $('#noticeModal').style.display = 'none';
+  } catch (e) {
+    $('#noticeError').textContent = e.message;
+  } finally {
+    $('#noticePost').disabled = false;
+  }
 });
 
 // ---------- 내 정보 수정 (프로필 + 비밀번호) ----------

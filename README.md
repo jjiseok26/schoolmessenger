@@ -7,8 +7,8 @@
 
 | 구분 | 폴더 | 설치파일 | 용도 |
 |------|------|----------|------|
-| 서버 | `server/` | `SchoolMessenger-Server-Setup-0.8.1.exe` | 교내 서버 PC 1대에 설치 (계정 관리 포함) |
-| 클라이언트 | `client/` | `SchoolMessenger-Client-Setup-0.8.1.exe` | 교직원 각자 PC에 설치 |
+| 서버 | `server/` | `SchoolMessenger-Server-Setup-0.9.0.exe` | 교내 서버 PC 1대에 설치 (계정 관리 포함) |
+| 클라이언트 | `client/` | `SchoolMessenger-Client-Setup-0.9.0.exe` | 교직원 각자 PC에 설치 |
 
 ## 주요 기능
 
@@ -36,7 +36,7 @@
 
 ### 1. 서버 설치 (학교에서 1대만)
 
-1. 항상 켜져 있는 PC(교무실 등)에 `SchoolMessenger-Server-Setup-0.8.1.exe` 실행
+1. 항상 켜져 있는 PC(교무실 등)에 `SchoolMessenger-Server-Setup-0.9.0.exe` 실행
 2. 첫 실행 시 **학교 이름**을 입력합니다 (나중에 변경 가능)
 3. 관리 화면에 **접속 주소**(예: `192.168.0.10:7777`)가 표시됩니다
 4. **사용자 관리**에서 교직원 계정을 등록합니다
@@ -47,7 +47,7 @@
 
 ### 2. 클라이언트 설치 (교직원 PC마다)
 
-1. `SchoolMessenger-Client-Setup-0.8.1.exe` 실행
+1. `SchoolMessenger-Client-Setup-0.9.0.exe` 실행
 2. 로그인 화면에서 서버 관리 화면에 표시된 **서버 주소**를 입력
 3. 서버에서 등록받은 아이디/비밀번호로 로그인
 

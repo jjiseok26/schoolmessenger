@@ -336,6 +336,7 @@ class MessengerServer {
       case 'add_room_members': return this._doAddRoomMembers(ws, msg);
       case 'leave_room': return this._doLeaveRoom(ws, msg);
       case 'post_notice': return this._doPostNotice(ws, msg);
+      case 'edit_notice': return this._doEditNotice(ws, msg);
       case 'delete_notice': return this._doDeleteNotice(ws, msg);
       case 'vote_poll': return this._doVotePoll(ws, msg);
       case 'cancel_scheduled_notice': return this._doCancelScheduledNotice(ws, msg);
@@ -546,7 +547,10 @@ class MessengerServer {
     if (dueNotices.length) {
       this.db.scheduledNotices = this.db.scheduledNotices.filter(s => s.publishAt > now);
       for (const s of dueNotices) {
-        const n = { id: s.id, authorId: s.authorId, authorName: s.authorName, title: s.title, body: s.body, time: Date.now() };
+        const n = {
+          id: s.id, authorId: s.authorId, authorName: s.authorName,
+          title: s.title, body: s.body, attachments: s.attachments || [], time: Date.now()
+        };
         if (s.poll) n.poll = s.poll;
         this.db.notices.push(n);
         this._broadcast({ type: 'notice', notice: n });
@@ -745,27 +749,53 @@ class MessengerServer {
       if (deadline <= Date.now()) return this._send(ws, { type: 'error', error: '설문 마감 시각은 미래여야 합니다.' });
       poll = { options, deadline, votes: {} };
     }
-    // 일반 사용자는 설문이 포함된 공지(=설문조사)만 등록 가능. 일반 공지는 관리자 전용
-    if (!user.admin && !poll) {
-      return this._send(ws, { type: 'error', error: '일반 사용자는 설문조사만 등록할 수 있습니다.' });
-    }
+    // 공지 첨부파일 (선택)
+    const attachments = this._cleanAttachments(msg.attachments);
     // 예약 공지 (선택)
     const publishAt = Number(msg.publishAt) || 0;
     if (publishAt > Date.now() + 20000) {
       const item = {
         id: newId(), authorId: user.id, authorName: user.name,
-        title, body, poll, publishAt, created: Date.now()
+        title, body, poll, attachments, publishAt, created: Date.now()
       };
       this.db.scheduledNotices.push(item);
       this._saveSoon();
       return this._send(ws, { type: 'notice_scheduled', item });
     }
-    const n = { id: newId(), authorId: user.id, authorName: user.name, title, body, time: Date.now() };
+    const n = {
+      id: newId(), authorId: user.id, authorName: user.name,
+      title, body, attachments, time: Date.now()
+    };
     if (poll) n.poll = poll;
     this.db.notices.push(n);
     this._saveSoon();
-    this.log(`공지 등록: "${title}" — ${user.name}${poll ? ' (설문 포함)' : ''}`);
+    this.log(`공지 등록: "${title}" — ${user.name}${poll ? ' (설문 포함)' : ''}${attachments.length ? ` (첨부 ${attachments.length}개)` : ''}`);
     this._broadcast({ type: 'notice', notice: n });
+  }
+
+  // 공지 수정 (작성자 본인 또는 관리자)
+  _doEditNotice(ws, msg) {
+    const user = this.db.users.find(u => u.id === ws.userId);
+    const n = this.db.notices.find(x => x.id === msg.noticeId);
+    if (!user || !n) return;
+    if (!user.admin && n.authorId !== user.id) {
+      return this._send(ws, { type: 'error', error: '공지를 수정할 권한이 없습니다.' });
+    }
+    const title = String(msg.title || '').trim().slice(0, 200);
+    if (!title) return this._send(ws, { type: 'error', error: '제목을 입력하세요.' });
+    n.title = title;
+    n.body = String(msg.body || '').slice(0, MAX_TEXT_LEN);
+    n.attachments = this._cleanAttachments(msg.attachments);
+    n.edited = Date.now();
+    n.editedBy = user.name;
+    // 설문 마감 시각만 연장/변경 가능 (기존 투표 유지, 항목은 그대로)
+    if (n.poll && msg.pollDeadline) {
+      const dl = Number(msg.pollDeadline) || 0;
+      if (dl > Date.now()) n.poll.deadline = dl;
+    }
+    this._saveSoon();
+    this.log(`공지 수정: "${title}" — ${user.name}`);
+    this._broadcast({ type: 'notice_updated', notice: n });
   }
 
   _doVotePoll(ws, msg) {

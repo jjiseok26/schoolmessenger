@@ -117,11 +117,17 @@
       </nav>
 
       <div id="tab-inbox" class="tab-body" style="display:none">
-        <input id="inboxSearch" class="list-search" placeholder="🔍 쪽지 내용/보낸 사람 검색">
+        <div class="list-toolbar">
+          <input id="inboxSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/보낸 사람 검색">
+          <button id="inboxComposeBtn" class="primary">✉ 쪽지 보내기</button>
+        </div>
         <div id="inboxList" class="msg-list"></div>
       </div>
       <div id="tab-sent" class="tab-body" style="display:none">
-        <input id="sentSearch" class="list-search" placeholder="🔍 쪽지 내용/받는 사람 검색">
+        <div class="list-toolbar">
+          <input id="sentSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/받는 사람 검색">
+          <button id="sentComposeBtn" class="primary">✉ 쪽지 보내기</button>
+        </div>
         <div id="sentList" class="msg-list"></div>
       </div>
 
@@ -159,7 +165,14 @@
         </div>
       </div>
 
-      <div id="tab-notice" class="tab-body"><div id="noticeList" class="msg-list"></div></div>
+      <div id="tab-notice" class="tab-body">
+        <div class="list-toolbar">
+          <input id="noticeSearch" class="list-search-inline" placeholder="🔍 공지 제목/내용/작성자 검색">
+          <button id="noticeWriteBtn2" class="primary">📝 공지 쓰기</button>
+          <button id="pollWriteBtn2">📊 설문 만들기</button>
+        </div>
+        <div id="noticeList" class="msg-list"></div>
+      </div>
     </section>
   </div>
 </div>
@@ -259,7 +272,13 @@
       <label>설문 마감 시각</label>
       <input type="datetime-local" id="pollDeadline" style="width:auto">
     </div>
+    <div id="noticeFileList" class="att-list"></div>
     <div class="row" style="margin-top:8px">
+      <button id="noticeAddFile" type="button">📎 파일 첨부</button>
+      <input type="file" id="noticeFiles" multiple style="display:none">
+      <span class="drop-hint">💡 파일을 이 창에 끌어다 놓아도 첨부됩니다</span>
+    </div>
+    <div class="row" style="margin-top:8px" id="noticeSchedRow">
       <label class="chk" style="margin:0"><input type="checkbox" id="noticeSchedChk"> ⏰ 예약 공지</label>
       <input type="datetime-local" id="noticeSchedTime" style="display:none;width:auto">
     </div>

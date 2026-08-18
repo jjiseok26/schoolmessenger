@@ -236,7 +236,20 @@ body.dark .ext-link { color: #64b5f6; }
   background: #e53935; color: #fff; border-radius: 10px; font-size: 11px;
   padding: 1px 7px; flex-shrink: 0;
 }
+/* 목록 상단 도구 모음 고정 (스크롤해도 따라다님) */
+.list-toolbar {
+  position: sticky; top: -10px; z-index: 5;
+  display: flex; gap: 6px; align-items: center; flex-wrap: nowrap;
+  background: #eef2f7; padding: 4px 0 8px;
+  box-shadow: 0 6px 8px -6px rgba(0,0,0,.15);
+}
+.list-toolbar .list-search-inline { flex: 1; min-width: 0; }
+.list-toolbar button { flex-shrink: 0; white-space: nowrap; }
+body.dark .list-toolbar { background: #191d23; }
 .list-search { margin-bottom: 8px; }
+
+/* 목록 항목의 동작 버튼: 항상 보이게 (마우스 올릴 때만 나오지 않도록) */
+.msg-actions { opacity: 1 !important; }
 
 /* 모달 */
 .modal-bg {
