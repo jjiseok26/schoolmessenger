@@ -8,6 +8,16 @@ const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 
+// 화면에 바로 표시할 수 있는 파일 형식 (Content-Type이 있어야 <img>/<video>로 렌더링됨)
+const MIME_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.ogv': 'video/ogg',
+  '.m4v': 'video/mp4', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.pdf': 'application/pdf'
+};
+
 const MAX_TEXT_LEN = 20000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
 const INIT_MSG_LIMIT = 500; // 로그인 시 내려주는 최근 쪽지 수
@@ -204,8 +214,13 @@ class MessengerServer {
         const fid = String(req.params.fid).replace(/[^a-f0-9]/g, '');
         const file = path.join(this.uploadDir, fid);
         if (!fid || !fs.existsSync(file)) return res.status(404).send('파일이 없습니다');
+        const name = String(req.params.name || '');
+        // 화면에 바로 표시(이미지·영상)하려면 ?inline=1 — 올바른 Content-Type과 inline 처리 필요
+        const inline = req.query.inline === '1';
+        const type = MIME_TYPES[path.extname(name).toLowerCase()];
+        if (type) res.setHeader('Content-Type', type);
         res.setHeader('Content-Disposition',
-          "attachment; filename*=UTF-8''" + encodeURIComponent(req.params.name));
+          (inline && type ? 'inline' : 'attachment') + "; filename*=UTF-8''" + encodeURIComponent(name));
         fs.createReadStream(file).pipe(res);
       });
 

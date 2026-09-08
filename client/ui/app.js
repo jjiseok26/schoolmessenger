@@ -907,6 +907,21 @@ $('#treeSelGroup').addEventListener('click', () => {
   if (S.treeSel.size) openGroupModal(null, [...S.treeSel]);
 });
 
+// 답장: 본문 아래에 원본 쪽지를 인용해서 넣음
+function replyToMessage(m) {
+  const head = `보낸 사람: ${nameOf(m.from)} · ${fmtFull(m.time)}`;
+  const bodyHtml = m.html
+    ? sanitizeHtmlKeepRelative(m.html)
+    : esc(m.text || '(내용 없음)').replace(/\n/g, '<br>');
+  const quoted =
+    '<br><br><div class="quoted-msg">' +
+    `<div class="quoted-head">─── 원본 쪽지 ───<br>${esc(head)}</div>` +
+    bodyHtml +
+    '</div>';
+  // 커서가 맨 위(답장 작성 위치)에 오도록 빈 줄을 앞에 둠
+  openCompose([m.from], '', [], '<div><br></div>' + quoted);
+}
+
 // 쪽지 전달 (서식/첨부 유지)
 function forwardMessage(m) {
   const header = `─── 전달된 쪽지 ───\n보낸 사람: ${nameOf(m.from)}\n시각: ${fmtFull(m.time)}\n──────────────\n`;
@@ -936,15 +951,18 @@ function msgItem(m, mode) {
   // 목록에서 내용을 열지 않고 바로 동작 (받은쪽지: 답장/전달/삭제, 보낸쪽지: 전달/삭제)
   const btns = document.createElement('span');
   btns.className = 'msg-actions';
+  const peerId = mode === 'inbox' ? m.from : m.to.find(id => id !== S.me.id);
   btns.innerHTML = `
     ${mode === 'inbox' ? '<button data-a="reply" title="답장">↩ 답장</button>' : ''}
+    ${peerId ? `<button data-a="chat" title="${esc(nameOf(peerId))} 님과 대화">💬</button>` : ''}
     <button data-a="fwd" title="전달">➦ 전달</button>
     <button data-a="del" class="danger-text" title="삭제">✕</button>`;
   btns.onclick = (e) => {
     e.stopPropagation();
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.a === 'reply') openCompose([m.from]);
+    if (b.dataset.a === 'reply') replyToMessage(m);
+    if (b.dataset.a === 'chat') openChat(peerId);
     if (b.dataset.a === 'fwd') forwardMessage(m);
     if (b.dataset.a === 'del' && confirm('이 쪽지를 내 보관함에서 삭제할까요?\n(상대방 화면에는 그대로 남습니다)')) {
       send({ type: 'delete_message', messageId: m.id });
@@ -1007,23 +1025,51 @@ const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const VIDEO_EXT = /\.(mp4|webm|ogv|m4v|mov)$/i;   // 브라우저 재생 가능한 영상
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|aac)$/i;
 
+// 미리보기용 URL (서버가 올바른 Content-Type + inline으로 응답 → 화면에 바로 표시됨)
+const inlineUrl = (u) => httpBase() + u + (u.includes('?') ? '&' : '?') + 'inline=1';
+
 function attachmentLinks(m) {
+  const atts = m.attachments || [];
+  if (!atts.length) return '';
   // 파일 하나당 한 줄씩 표시 (개수 파악이 쉬움) + 이미지·영상·오디오는 바로 재생/표시
-  return m.attachments.map((a, i) => {
-    const url = esc(httpBase() + a.url);
+  const lines = atts.map((a, i) => {
+    const url = esc(httpBase() + a.url);       // 다운로드용
+    const view = esc(inlineUrl(a.url));        // 화면 표시용
     let media = '';
     if (IMG_EXT.test(a.name)) {
-      media = `<img class="att-img" src="${url}" alt="${esc(a.name)}">`;
+      media = `<img class="att-img" src="${view}" alt="${esc(a.name)}">`;
     } else if (VIDEO_EXT.test(a.name)) {
-      media = `<video class="att-video" src="${url}" controls preload="metadata"></video>`;
+      media = `<video class="att-video" src="${view}" controls preload="metadata"></video>`;
     } else if (AUDIO_EXT.test(a.name)) {
-      media = `<audio class="att-audio" src="${url}" controls preload="metadata"></audio>`;
+      media = `<audio class="att-audio" src="${view}" controls preload="metadata"></audio>`;
     }
     const icon = IMG_EXT.test(a.name) ? '🖼' : VIDEO_EXT.test(a.name) ? '🎬' : AUDIO_EXT.test(a.name) ? '🎵' : '📎';
     return `<div class="att-line">
       <a href="${url}">${icon} ${i + 1}. ${esc(a.name)} (${fmtSize(a.size)})</a>${media}</div>`;
   }).join('');
+  // 첨부가 2개 이상이면 한 번에 모두 내려받기
+  const all = atts.length > 1
+    ? `<div class="att-all"><button class="att-all-btn" data-urls="${esc(atts.map(a => a.url).join('|'))}">
+         ⬇ 첨부 ${atts.length}개 모두 저장</button></div>`
+    : '';
+  return all + lines;
 }
+
+// "모두 저장" 버튼 (본문 어디에 있든 동작)
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.att-all-btn');
+  if (!btn) return;
+  e.preventDefault();
+  const urls = (btn.dataset.urls || '').split('|').filter(Boolean);
+  // 순차 다운로드 (동시에 시작하면 일부가 누락될 수 있음)
+  urls.forEach((u, i) => setTimeout(() => {
+    const a = document.createElement('a');
+    a.href = httpBase() + u;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }, i * 400));
+});
 
 function renderChatHead() {
   if (!S.chatPeer) { $('#chatHead').textContent = '왼쪽 목록에서 대화 상대를 두 번 클릭하세요'; return; }
@@ -1607,8 +1653,18 @@ function openDetail(m, mode) {
   $('#detailReply').style.display = mode === 'inbox' ? '' : 'none';
   $('#detailReply').onclick = () => {
     $('#detailModal').style.display = 'none';
-    openCompose([m.from]);
+    replyToMessage(m);
   };
+  // 1:1 대화창으로 이동 (받은쪽지는 보낸이, 보낸쪽지는 첫 수신자)
+  const peer = mode === 'inbox' ? m.from : m.to.find(id => id !== S.me.id);
+  $('#detailChat').style.display = peer ? '' : 'none';
+  if (peer) {
+    $('#detailChat').textContent = `💬 ${nameOf(peer)} 님과 대화`;
+    $('#detailChat').onclick = () => {
+      $('#detailModal').style.display = 'none';
+      openChat(peer);
+    };
+  }
   // 전달
   $('#detailForward').style.display = '';
   $('#detailForward').textContent = '전달';
@@ -1700,6 +1756,7 @@ function openNoticeDetail(n) {
   }
   $('#detailRecall').style.display = 'none';
   $('#detailDelete').style.display = 'none';
+  $('#detailChat').style.display = 'none';
   // 작성자 본인 또는 관리자는 수정·삭제 가능
   const canEdit = S.me.admin || n.authorId === S.me.id;
   $('#detailForward').style.display = canEdit ? '' : 'none';
@@ -1765,12 +1822,15 @@ function sanitizeHtml(html, keepRelative) {
         if (tag === 'IMG' && n === 'src') continue;
         if (n === 'style') { child.setAttribute('style', filterStyle(attr.value)); continue; }
         if (n === 'align') continue;
+        // 인용 블록 스타일 유지 (허용된 클래스만)
+        if (n === 'class' && /^(quoted-msg|quoted-head)$/.test(attr.value)) continue;
         child.removeAttribute(attr.name);
       }
       if (tag === 'IMG') {
         const src = String(child.getAttribute('src') || '');
         if (src.startsWith('/files/')) {
-          if (!keepRelative) child.setAttribute('src', httpBase() + src);
+          // 화면 표시용 inline URL로 변환 (전달 시에는 상대 경로 유지)
+          if (!keepRelative) child.setAttribute('src', inlineUrl(src));
           child.setAttribute('style', 'max-width:100%;border-radius:6px;');
         } else child.remove();
         continue;
