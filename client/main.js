@@ -42,11 +42,13 @@ function downloadDir() {
 }
 
 function createWindow() {
+  // 작은 화면에서는 화면 크기에 맞춰 축소 (작업표시줄 제외 영역 기준)
+  const { width: sw, height: sh } = require('electron').screen.getPrimaryDisplay().workAreaSize;
   win = new BrowserWindow({
-    width: 1080,
-    height: 720,
-    minWidth: 800,
-    minHeight: 560,
+    width: Math.min(1320, sw - 40),   // 버튼 글자가 아이콘으로 축약되지 않는 너비 (축약 기준 1100px)
+    height: Math.min(820, sh - 60),
+    minWidth: 900,
+    minHeight: 600,
     title: '학교메신저',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

@@ -1891,6 +1891,27 @@ function composeHtmlForSend(uploaded) {
   return clone.innerHTML.slice(0, 200000);
 }
 
+// 붙여넣기·드롭으로 들어온 data:/blob: 이미지를 첨부파일로 올려 본문에 남긴다.
+// (이 처리가 없으면 전송할 때 본문 이미지가 사라짐)
+async function materializeEditorImages() {
+  const imgs = [...$('#composeText').querySelectorAll('img')];
+  for (const img of imgs) {
+    const src = img.getAttribute('src') || '';
+    if (src.startsWith('/files/')) continue;                       // 이미 서버에 있는 이미지
+    if (S.composeFileList.some(x => x._previewUrl === src)) continue; // 이미 첨부 목록에 있음
+    try {
+      const blob = await (await fetch(src)).blob();
+      const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+      const file = new File([blob], `붙여넣기-${Date.now()}.${ext}`, { type: blob.type });
+      file._previewUrl = src;
+      S.composeFileList.push(file);
+    } catch (e) {
+      img.remove(); // 되살릴 수 없는 이미지는 제거
+    }
+  }
+  renderComposeFiles();
+}
+
 // 메시지에 저장된 서식 → 인라인 스타일 (구버전 쪽지 호환)
 function msgStyleCss(m) {
   if (!m.style) return '';
@@ -2115,10 +2136,16 @@ $('#schedChk').addEventListener('change', (e) => {
 });
 
 $('#composeBtn').addEventListener('click', () => openCompose());
-$('#composeCancel').addEventListener('click', () => {
+function closeCompose() {
   saveDraft(); // 실수로 닫아도 내용이 남도록 저장
   clearInterval(S.draftTimer);
   $('#composeModal').style.display = 'none';
+}
+$('#composeCancel').addEventListener('click', closeCompose);
+$('#composeClose').addEventListener('click', closeCompose);
+// ESC로도 닫기 (작성 중 내용은 임시저장됨)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#composeModal').style.display !== 'none') closeCompose();
 });
 // 지금 임시저장하고 닫기
 $('#draftSaveBtn').addEventListener('click', () => {
@@ -2127,6 +2154,21 @@ $('#draftSaveBtn').addEventListener('click', () => {
   $('#composeModal').style.display = 'none';
   alert('작성 중인 쪽지를 임시저장했습니다.\n다시 [쪽지 보내기]를 열면 이어서 작성할 수 있습니다.');
 });
+// 이미지 붙여넣기(Ctrl+V): 첨부로 등록하고 본문에 삽입
+$('#composeText').addEventListener('paste', (e) => {
+  const items = [...(e.clipboardData?.items || [])];
+  const imgItem = items.find(it => it.type && it.type.startsWith('image/'));
+  if (!imgItem) return; // 일반 텍스트 붙여넣기는 그대로
+  const blob = imgItem.getAsFile();
+  if (!blob) return;
+  e.preventDefault();
+  const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+  const file = new File([blob], `붙여넣기-${Date.now()}.${ext}`, { type: blob.type });
+  addComposeFiles([file]);
+  const added = S.composeFileList.find(x => x.name === file.name && x.size === file.size);
+  if (added) insertImageToEditor(added);
+});
+
 // 입력이 멈추면 자동 저장
 let draftDebounce = null;
 $('#composeText').addEventListener('input', () => {
@@ -2155,7 +2197,10 @@ $('#composeSend').addEventListener('click', async () => {
   $('#composeSend').disabled = true;
   $('#composeError').textContent = files.length ? '파일 업로드 중…' : '';
   try {
-    const uploaded = files.length ? await uploadFiles(files) : [];
+    // 붙여넣은 이미지를 첨부로 변환 (본문 이미지가 사라지지 않도록)
+    await materializeEditorImages();
+    const files2 = S.composeFileList || [];
+    const uploaded = files2.length ? await uploadFiles(files2) : [];
     const attachments = [...carry, ...uploaded];
     // 서식(태그)이 있으면 HTML 본문도 함께 전송
     const html = editor.querySelector('*') ? composeHtmlForSend(uploaded) : undefined;

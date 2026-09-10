@@ -85,9 +85,35 @@ class MessengerServer {
   }
 
   // ---------- DB ----------
+  // 정상 파일 → 백업 → (실패 시) 새 DB 순으로 불러옴. 손상 파일은 절대 덮어쓰지 않고 보존한다.
   _loadDb() {
-    try {
-      const db = JSON.parse(fs.readFileSync(this.dbFile, 'utf8'));
+    const bakFile = this.dbFile + '.bak';
+    for (const [file, label] of [[this.dbFile, '데이터'], [bakFile, '백업']]) {
+      if (!fs.existsSync(file)) continue;
+      try {
+        const db = this._normalizeDb(JSON.parse(fs.readFileSync(file, 'utf8')));
+        if (file === bakFile) {
+          // 본 파일이 손상되어 백업으로 복구한 경우: 손상 파일을 남겨 둔다
+          const keep = this.dbFile + '.corrupt-' + Date.now();
+          try { fs.renameSync(this.dbFile, keep); } catch (e) {}
+          this._recovered = `데이터 파일이 손상되어 백업에서 복구했습니다.\n손상된 파일은 보관해 두었습니다:\n${keep}`;
+        }
+        return db;
+      } catch (e) {
+        console.error(`${label} 파일을 읽을 수 없습니다:`, e.message);
+      }
+    }
+    // 둘 다 실패: 기존 파일이 있으면 보존한 뒤 새로 시작 (조용한 초기화 방지)
+    if (fs.existsSync(this.dbFile)) {
+      const keep = this.dbFile + '.corrupt-' + Date.now();
+      try { fs.renameSync(this.dbFile, keep); } catch (e) {}
+      this._recovered = `데이터 파일을 읽을 수 없어 새로 시작합니다.\n기존 파일은 보관해 두었습니다:\n${keep}`;
+    }
+    return this._createDb();
+  }
+
+  _normalizeDb(db) {
+    {
       db.users = db.users || [];
       db.messages = db.messages || [];
       db.notices = db.notices || [];
@@ -106,27 +132,47 @@ class MessengerServer {
       db.scheduledNotices = db.scheduledNotices || [];
       db.signups = db.signups || [];
       return db;
-    } catch (e) {
-      const salt = newId();
-      const db = {
-        users: [{
-          id: 'admin', name: '관리자', dept: '관리자', depts: ['관리자'], position: '시스템관리자',
-          admin: true, salt, pw: hashPw('admin1234', salt)
-        }],
-        messages: [],
-        notices: [],
-        rooms: [],
-        roomMsgs: [],
-        scheduled: [],
-        settings: { retentionDays: 0, userOrder: {}, extraDepts: [] },
-        userGroups: [],
-        scheduledNotices: [],
-        signups: []
-      };
-      fs.mkdirSync(this.dataDir, { recursive: true });
-      fs.writeFileSync(this.dbFile, JSON.stringify(db, null, 1));
-      return db;
     }
+  }
+
+  _createDb() {
+    const salt = newId();
+    const db = {
+      users: [{
+        id: 'admin', name: '관리자', dept: '관리자', depts: ['관리자'], position: '시스템관리자',
+        admin: true, salt, pw: hashPw('admin1234', salt)
+      }],
+      messages: [],
+      notices: [],
+      rooms: [],
+      roomMsgs: [],
+      scheduled: [],
+      settings: { retentionDays: 0, userOrder: {}, extraDepts: [] },
+      userGroups: [],
+      scheduledNotices: [],
+      signups: []
+    };
+    fs.mkdirSync(this.dataDir, { recursive: true });
+    this._writeDb(db);
+    return db;
+  }
+
+  // 원자적 저장: 임시 파일에 쓰고 디스크에 반영한 뒤 교체 (쓰기 중 종료돼도 기존 파일이 온전함)
+  _writeDb(db) {
+    const tmp = this.dbFile + '.tmp';
+    const json = JSON.stringify(db, null, 1);
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeFileSync(fd, json);
+      fs.fsyncSync(fd);       // 디스크에 실제 기록되도록 강제
+    } finally {
+      fs.closeSync(fd);
+    }
+    // 직전 정상본을 백업으로 남긴 뒤 교체
+    if (fs.existsSync(this.dbFile)) {
+      try { fs.copyFileSync(this.dbFile, this.dbFile + '.bak'); } catch (e) {}
+    }
+    fs.renameSync(tmp, this.dbFile);
   }
 
   _saveSoon() {
@@ -134,14 +180,14 @@ class MessengerServer {
     this._saveTimer = setTimeout(() => {
       this._saveTimer = null;
       try {
-        fs.writeFileSync(this.dbFile, JSON.stringify(this.db, null, 1));
+        this._writeDb(this.db);
       } catch (e) { console.error('DB 저장 실패:', e); }
     }, 300);
   }
 
   saveNow() {
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; }
-    try { fs.writeFileSync(this.dbFile, JSON.stringify(this.db, null, 1)); } catch (e) {}
+    try { this._writeDb(this.db); } catch (e) { console.error('DB 저장 실패:', e); }
   }
 
   // ---------- 활동 로그 ----------
@@ -647,9 +693,19 @@ class MessengerServer {
         if (mm) referenced.add(mm[1]);
       }
     };
-    for (const m of this.db.messages) collect(m.attachments);
-    for (const m of this.db.roomMsgs) collect(m.attachments);
-    for (const s of this.db.scheduled) collect(s.attachments);
+    // 본문(서식 HTML)에 삽입된 이미지도 참조로 인정 — 없으면 본문 이미지가 지워짐
+    const collectHtml = (html) => {
+      if (!html) return;
+      const re = /\/files\/([a-f0-9]+)\//g;
+      let mm;
+      while ((mm = re.exec(html))) referenced.add(mm[1]);
+    };
+    for (const m of this.db.messages) { collect(m.attachments); collectHtml(m.html); }
+    for (const m of this.db.roomMsgs) { collect(m.attachments); collectHtml(m.html); }
+    for (const s of this.db.scheduled) { collect(s.attachments); collectHtml(s.html); }
+    // 공지·예약 공지의 첨부도 보존 (누락 시 공지 첨부가 다운로드되지 않음)
+    for (const n of this.db.notices) { collect(n.attachments); collectHtml(n.body); }
+    for (const n of this.db.scheduledNotices) { collect(n.attachments); collectHtml(n.body); }
     let removedFiles = 0, freedBytes = 0;
     const graceMs = 3600000; // 업로드 직후(전송 전) 파일 보호: 1시간 유예
     try {

@@ -106,6 +106,11 @@ app.whenReady().then(async () => {
   server = new MessengerServer(dataDir);
   server.schoolName = settings.schoolName || '';
   server.onStatusChange = pushStatus;
+  // 데이터 파일이 손상되어 백업으로 복구했으면 관리자에게 알림
+  if (server._recovered) {
+    server.log('데이터 복구: ' + server._recovered.replace(/\n/g, ' '));
+    dialog.showErrorBox('데이터 복구 안내', server._recovered);
+  }
   try {
     await server.start(settings.port);
   } catch (e) {
