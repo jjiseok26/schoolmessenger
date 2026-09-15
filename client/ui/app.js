@@ -482,17 +482,41 @@ function verNewer(a, b) { // a가 b보다 최신인가
   return false;
 }
 
+// 새 버전이 있으면 묻지 않고 백그라운드로 내려받고, 준비되면 상단 배너로 "재시작" 안내
 async function checkClientUpdate(serverVer) {
   try {
     if (!serverVer || S.updatePrompted === serverVer) return;
     const mine = await window.native.getVersion();
     if (!verNewer(serverVer, mine)) return;
     S.updatePrompted = serverVer;
-    if (confirm(`메신저 새 버전 v${serverVer}이(가) 있습니다. (현재 v${mine})\n지금 업데이트할까요?\n\n다운로드 진행 상황이 오른쪽 아래에 표시되고,\n완료되면 메신저가 종료되면서 설치가 바로 시작됩니다.`)) {
-      window.native.downloadUpdate(httpBase() + '/client-update');
-    }
+    const r = await window.native.downloadUpdate(httpBase() + '/client-update', serverVer);
+    if (r && r.ready) showUpdateBanner(serverVer);
   } catch (e) {}
 }
+
+// 업데이트 준비 배너
+function showUpdateBanner(version) {
+  $('#updateVersion').textContent = 'v' + version;
+  $('#updateBanner').style.display = '';
+}
+$('#updateRestartBtn').addEventListener('click', async () => {
+  $('#updateRestartBtn').disabled = true;
+  $('#updateRestartBtn').textContent = '설치 중… 잠시 후 자동으로 다시 시작됩니다';
+  const ok = await window.native.installUpdate();
+  if (!ok) {
+    $('#updateRestartBtn').disabled = false;
+    $('#updateRestartBtn').textContent = '🔄 지금 재시작하여 업데이트';
+    alert('업데이트 파일을 찾을 수 없습니다. 다시 로그인하면 새로 내려받습니다.');
+    S.updatePrompted = null;
+    $('#updateBanner').style.display = 'none';
+  }
+});
+$('#updateLaterBtn').addEventListener('click', () => {
+  $('#updateBanner').style.display = 'none';
+  // 배너를 닫아도 종료할 때 자동으로 설치되어 다음 실행 때 새 버전이 적용됨
+});
+window.native?.onUpdateReady?.((d) => showUpdateBanner(d.version));
+window.native?.onUpdateFailed?.(() => { S.updatePrompted = null; }); // 다음 로그인 때 재시도
 
 function backToLogin(msg) {
   disconnect();
@@ -920,6 +944,30 @@ function replyToMessage(m) {
     '</div>';
   // 커서가 맨 위(답장 작성 위치)에 오도록 빈 줄을 앞에 둠
   openCompose([m.from], '', [], '<div><br></div>' + quoted);
+  focusEditorStart();
+}
+
+// 쪽지 본문 맨 앞(인용문 위 빈 줄)에 커서 놓기 — 모달 표시/선택기 렌더 뒤 포커스가 옮겨져도 다시 본문으로
+function focusEditorStart() {
+  const place = () => {
+    const ed = $('#composeText');
+    if (!ed || $('#composeModal').style.display === 'none') return;
+    ed.focus();
+    try {
+      const range = document.createRange();
+      const first = ed.firstChild;
+      if (first && first.nodeType === Node.ELEMENT_NODE) range.setStart(first, 0);
+      else range.setStart(ed, 0);
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) {}
+    ed.scrollTop = 0;
+  };
+  place();
+  setTimeout(place, 80);
+  setTimeout(place, 300);
 }
 
 // 쪽지 전달 (서식/첨부 유지)
@@ -2626,6 +2674,25 @@ $('#dlDirReset').addEventListener('click', async () => {
 });
 $('#dlDirOpen').addEventListener('click', () => window.native.openDownloadDir());
 $('#settingsClose').addEventListener('click', () => { $('#settingsModal').style.display = 'none'; });
+$('#dlDirBtn').addEventListener('click', () => window.native.openDownloadDir()); // 헤더: 받은 파일 폴더 열기
+
+// 모든 모달 오른쪽 위 닫기(X) 버튼 — 각 모달의 취소/닫기 버튼과 같은 동작 (쪽지 보내기는 전용 X 버튼 있음)
+const MODAL_CLOSE_BTN = {
+  detailModal: '#detailClose', noticeModal: '#noticeCancel', groupModal: '#groupModalCancel',
+  adminModal: '#adminClose', roomModal: '#roomModalCancel', settingsModal: '#settingsClose',
+  profileModal: '#pwCancel', deptRenameModal: '#drCancel', aboutModal: '#aboutClose', signupModal: '#signupCancel'
+};
+for (const [modalId, closeSel] of Object.entries(MODAL_CLOSE_BTN)) {
+  const modal = document.querySelector('#' + modalId + ' .modal');
+  if (!modal || modal.querySelector('.modal-x')) continue;
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'modal-x';
+  x.title = '닫기';
+  x.textContent = '✕';
+  x.addEventListener('click', () => $(closeSel).click());
+  modal.prepend(x);
+}
 $('#autostartChk').addEventListener('change', async (e) => {
   e.target.checked = await window.native.setAutostart(e.target.checked);
 });
@@ -2708,7 +2775,8 @@ window.native.onDownloadProgress((d) => {
   if (d.state === 'completed') {
     bar.style.width = '100%';
     if (d.isUpdate) {
-      st.textContent = `✅ 다운로드 완료 (${fmtSize(d.received)}) — 설치를 시작합니다…`;
+      st.textContent = `✅ 준비 완료 (${fmtSize(d.received)}) — 상단의 [재시작] 버튼을 누르면 적용됩니다`;
+      remove(12000);
       return;
     }
     st.innerHTML = `✅ 완료 (${fmtSize(d.received)})

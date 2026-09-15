@@ -9,7 +9,49 @@ app.setAppUserModelId('kr.school.messenger.client');
 let win = null;
 let tray = null;
 let quitting = false;
-let pendingUpdateUrl = null; // 자동 업데이트 다운로드 중인 URL
+let pendingUpdateUrl = null;     // 자동 업데이트 다운로드 중인 URL
+let pendingUpdateVersion = '';   // 내려받는 중인 버전
+let updateReady = null;          // { path, version } 설치 준비 완료된 업데이트
+let installingUpdate = false;    // 설치 프로그램을 이미 띄웠는지 (중복 실행 방지)
+
+function verNewer(a, b) { // a > b ?
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0); }
+  return false;
+}
+// 이미 적용된(현재 버전 이하) 업데이트 설치파일을 임시 폴더에서 정리
+function cleanOldUpdateFiles() {
+  try {
+    const dir = app.getPath('temp');
+    for (const f of fs.readdirSync(dir)) {
+      const m = /^SchoolMessenger-Update-(\d+\.\d+\.\d+)\.exe$/.exec(f);
+      if (m && !verNewer(m[1], app.getVersion())) fs.unlink(path.join(dir, f), () => {});
+    }
+  } catch (e) {}
+}
+
+// 무음 설치 후 자동 재실행 (재시작 버튼) / 종료 시 무음 설치만 (다음 실행 때 새 버전)
+// /S=무음, --updated=실행 중인 앱이 스스로 종료되길 기다린 뒤 진행, --force-run=설치 후 앱 실행
+function installUpdate(relaunch) {
+  if (!updateReady || installingUpdate) return false;
+  if (!fs.existsSync(updateReady.path)) { updateReady = null; return false; }
+  installingUpdate = true;
+  const args = ['/S', '--updated'];
+  if (relaunch) args.push('--force-run');
+  try {
+    const child = require('child_process').spawn(updateReady.path, args, {
+      detached: true, stdio: 'ignore', windowsHide: true
+    });
+    child.unref();
+  } catch (e) {
+    installingUpdate = false;
+    dialog.showErrorBox('업데이트 실패', '설치 프로그램을 실행하지 못했습니다.\n' + e.message);
+    return false;
+  }
+  quitting = true;
+  app.quit(); // 설치 프로그램이 앱 종료를 기다렸다가 파일을 교체함
+  return true;
+}
 
 // 중복 실행 방지: 이미 실행 중이면 기존 창을 앞으로
 if (!app.requestSingleInstanceLock()) {
@@ -97,6 +139,7 @@ function createTray() {
 
 app.whenReady().then(() => {
   loadSettings();
+  setTimeout(cleanOldUpdateFiles, 15000); // 설치 프로그램이 완전히 끝난 뒤 정리
   // 설치 후 첫 실행: Windows 시작 시 자동 실행 기본 켜기 (이후엔 설정에서 변경 가능)
   const initFlag = path.join(app.getPath('userData'), '.autostart-init');
   if (app.isPackaged && !fs.existsSync(initFlag)) {
@@ -105,15 +148,16 @@ app.whenReady().then(() => {
   }
   session.defaultSession.on('will-download', (e, item) => {
     if (pendingUpdateUrl && item.getURL() === pendingUpdateUrl) {
-      // 자동 업데이트: 진행률을 화면에 표시하며 내려받고, 완료되면 설치파일을 바로 실행
+      // 자동 업데이트: 백그라운드로 내려받고, 완료되면 "재시작" 안내만 표시 (강제 종료 없음)
       pendingUpdateUrl = null;
-      const savePath = path.join(app.getPath('temp'), item.getFilename());
+      const version = pendingUpdateVersion;
+      const savePath = path.join(app.getPath('temp'), `SchoolMessenger-Update-${version || Date.now()}.exe`);
       item.setSavePath(savePath);
       const dlId = 'update-' + Date.now();
       const sendProgress = (state) => {
         if (win && !win.isDestroyed()) {
           win.webContents.send('download-progress', {
-            id: dlId, name: '새 버전 설치파일 — ' + item.getFilename(),
+            id: dlId, name: `새 버전 v${version} 내려받는 중`,
             path: savePath, state, isUpdate: true,
             received: item.getReceivedBytes(), total: item.getTotalBytes()
           });
@@ -121,14 +165,14 @@ app.whenReady().then(() => {
       };
       sendProgress('progressing');
       item.on('updated', (ev, state) => sendProgress(state));
-      item.once('done', async (ev, state) => {
+      item.once('done', (ev, state) => {
         sendProgress(state);
         if (state === 'completed') {
-          await shell.openPath(savePath); // 설치 즉시 시작
-          quitting = true;
-          app.quit();
+          updateReady = { path: savePath, version };
+          if (win && !win.isDestroyed()) win.webContents.send('update-ready', { version });
         } else {
-          dialog.showErrorBox('업데이트 실패', '업데이트 파일을 내려받지 못했습니다. 잠시 후 다시 시도해 주세요.');
+          pendingUpdateVersion = '';
+          if (win && !win.isDestroyed()) win.webContents.send('update-failed', { version });
         }
       });
       return;
@@ -163,15 +207,38 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   // 트레이 상주: 창이 없어도 알림 수신을 위해 계속 실행
 });
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => {
+  quitting = true;
+  // 준비된 업데이트가 있는데 사용자가 그냥 종료하면 조용히 설치 (다음 실행 때 새 버전)
+  if (updateReady && !installingUpdate) {
+    installingUpdate = true;
+    try {
+      const child = require('child_process').spawn(updateReady.path, ['/S', '--updated'], {
+        detached: true, stdio: 'ignore', windowsHide: true
+      });
+      child.unref();
+    } catch (e) {}
+  }
+});
 
 ipcMain.handle('get-version', () => app.getVersion());
-ipcMain.handle('download-update', (e, url) => {
-  if (!/^https?:\/\/[^/]+\/client-update$/.test(String(url))) return false;
+// 새 버전 자동 다운로드 시작 (이미 준비됐거나 받는 중이면 건너뜀)
+ipcMain.handle('download-update', (e, url, version) => {
+  if (!/^https?:\/\/[^/]+\/client-update$/.test(String(url))) return { ok: false };
+  version = String(version || '');
+  if (updateReady && updateReady.version === version && fs.existsSync(updateReady.path)) {
+    return { ok: true, ready: true, version };
+  }
+  if (pendingUpdateUrl) return { ok: true, downloading: true };
   pendingUpdateUrl = url;
+  pendingUpdateVersion = version;
   win.webContents.downloadURL(url);
-  return true;
+  return { ok: true, downloading: true };
 });
+ipcMain.handle('get-update-ready', () =>
+  (updateReady && fs.existsSync(updateReady.path)) ? { version: updateReady.version } : null);
+// "지금 재시작하여 업데이트" 버튼
+ipcMain.handle('install-update', () => installUpdate(true));
 
 ipcMain.handle('get-autostart', () => app.getLoginItemSettings().openAtLogin);
 ipcMain.handle('set-autostart', (e, on) => {
