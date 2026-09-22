@@ -454,6 +454,57 @@ body.dark .admin-table th, body.dark .admin-table td { border-color: #333b47; }
 body.dark .poll-box { border-color: #39424f; }
 body.dark .poll-bar-wrap { background: #2a313c; }
 body.dark .poll-bar { background: #2b578c; }
+.poll-opt input[type=checkbox] { width: auto; }
+.poll-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; font-size: 15px; }
+.poll-tag {
+  font-size: 11px; font-weight: bold; background: #e3f0fd; color: #1565c0;
+  border-radius: 6px; padding: 2px 7px;
+}
+body.dark .poll-tag { background: #1d3a5f; color: #7fbcf7; }
+.poll-pick { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 120px; margin: 0; }
+.poll-voters {
+  font-size: 12px; color: #667; margin: -2px 0 4px 20px; line-height: 1.5; word-break: break-all;
+}
+body.dark .poll-voters { color: #94a0af; }
+.poll-btns { display: flex; gap: 6px; margin-top: 10px; }
+.poll-btns button { padding: 5px 12px; font-size: 13px; }
+/* 설문 만들 때의 선택 방식 */
+.poll-setting-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+/* 채팅방 설문 카드 */
+.poll-row { justify-content: center; }
+.poll-bubble { max-width: 92%; width: 460px; }
+.poll-bubble .poll-box { margin-top: 4px; background: #fff; }
+body.dark .poll-bubble .poll-box { background: #21262e; }
+
+/* 대화/채팅방 전송 대기 첨부 */
+.pending-atts {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 7px 10px; background: #f4f7fb; border-top: 1px solid #dde3ec;
+}
+.pending-head { font-size: 12px; color: #1565c0; font-weight: bold; }
+.pending-chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 13px;
+  background: #fff; border: 1px solid #c9d6e6; border-radius: 14px; padding: 3px 10px; max-width: 320px;
+}
+.pending-chip .att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.dark .pending-atts { background: #21262e; border-color: #333b47; }
+body.dark .pending-chip { background: #2a313c; border-color: #414b5a; }
+
+/* 회원가입 요청 승인 */
+.signup-item {
+  border: 1px solid #e2e8f2; border-radius: 10px; padding: 10px 12px;
+  margin-bottom: 8px; background: #fff;
+}
+.signup-item .su-line { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.signup-item .su-id {
+  font-size: 12px; color: #1565c0; background: #e3f0fd; border-radius: 6px; padding: 1px 7px;
+}
+.signup-item .su-detail { font-size: 13px; color: #556; margin: 6px 0 8px; line-height: 1.6; }
+.signup-item .su-btns { display: flex; gap: 6px; }
+.signup-item .su-btns button { padding: 5px 14px; font-size: 13px; }
+body.dark .signup-item { background: #262c36; border-color: #39424f; }
+body.dark .signup-item .su-id { background: #1d3a5f; color: #7fbcf7; }
+body.dark .signup-item .su-detail { color: #9aa5b3; }
 
 /* 조직도 다중 선택 */
 .tree-sel-bar {

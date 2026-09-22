@@ -99,6 +99,8 @@ const S = {
   tab: 'notice', chatPeer: null,
   recipients: new Set(), composeFileList: [], draftTimer: null,
   roomPick: new Set(), roomModalMode: 'create',
+  chatFiles: [], roomFiles: [],   // 대화/채팅방에서 전송 대기 중인 첨부파일
+  signups: [],                    // 관리자: 승인 대기 중인 회원가입 요청
   closedDepts: new Set(),
   reconnectTimer: null
 };
@@ -273,6 +275,7 @@ function handleServer(m) {
       S.deptOrder = m.deptOrder || [];
       S.userOrder = m.userOrder || {};
       S.extraDepts = m.extraDepts || [];
+      S.signups = m.signups || [];
       if (S.currentRoom && !roomById(S.currentRoom)) S.currentRoom = null;
       S.loggedIn = true;
       $('#connBanner').style.display = 'none';
@@ -387,6 +390,15 @@ function handleServer(m) {
       renderRooms(); updateBadges();
       break;
     }
+    case 'room_message_updated': {
+      // 채팅방 설문 투표 결과 갱신
+      const msg = m.message;
+      const list = S.roomMsgs[msg.roomId] || [];
+      const i = list.findIndex(x => x.id === msg.id);
+      if (i >= 0) list[i] = msg;
+      if (S.currentRoom === msg.roomId) renderRoomChat();
+      break;
+    }
     case 'room_updated': {
       const idx = S.rooms.findIndex(r => r.id === m.room.id);
       if (idx >= 0) S.rooms[idx] = m.room; else S.rooms.push(m.room);
@@ -463,8 +475,18 @@ function handleServer(m) {
       renderTree();
       break;
     case 'signup_alert':
-      // 관리자 권한 사용자에게만 서버가 보냄
-      notifyUser('🔔 회원가입 요청', `${m.name}(${m.id}) — ${m.dept} ${m.position}\n서버 관리 프로그램에서 승인해 주세요.`);
+      // 관리자 권한 사용자에게만 서버가 보냄 — 알림을 누르면 승인 창이 바로 열림
+      notifyUser('🔔 회원가입 요청', `${m.name}(${m.id}) — ${m.dept} ${m.position}\n클릭하면 승인 창이 열립니다.`,
+        () => openSignupMgr());
+      break;
+    case 'signups':
+      S.signups = m.list || [];
+      renderSignups();
+      break;
+    case 'signup_handled':
+      if (!m.ok) alert('처리하지 못했습니다.\n' + (m.error || ''));
+      else if (m.action === 'approve') alert(`✔ ${m.name} 님의 가입을 승인했습니다.\n이제 아이디 "${m.id}"로 로그인할 수 있습니다.`);
+      else alert(`${m.name} 님의 가입 요청을 거절했습니다.`);
       break;
     case 'error':
       console.warn('서버 오류:', m.error);
@@ -549,6 +571,7 @@ function renderAll() {
   renderChat();
   renderRooms();
   renderNotices();
+  renderSignups();
   updateBadges();
 }
 
@@ -1131,6 +1154,7 @@ function renderChat() {
   renderChatHead();
   const log = $('#chatLog');
   $('#chatInputRow').style.display = S.chatPeer ? '' : 'none';
+  renderPending('chat');
   log.innerHTML = '';
   if (!S.chatPeer) return;
   const items = S.messages.filter(m =>
@@ -1199,6 +1223,8 @@ function renderRoomList() {
 }
 
 function openRoom(roomId) {
+  // 다른 방으로 옮기면 이전 방에 붙여 두었던 첨부는 비움 (엉뚱한 방으로 전송 방지)
+  if (S.currentRoom !== roomId) S.roomFiles = [];
   S.currentRoom = roomId;
   markRoomSeen(roomId);
   renderRooms(); updateBadges();
@@ -1210,12 +1236,30 @@ function renderRoomChat() {
   if (!room) return;
   $('#roomChatTitle').textContent = `${room.name} (${room.members.map(nameOf).join(', ')})`;
   const log = $('#roomLog');
+  // 투표 등으로 다시 그릴 때 보던 위치를 유지 (맨 아래를 보고 있었으면 계속 맨 아래)
+  const prevTop = log.scrollTop;
+  const wasAtBottom = log.scrollHeight - prevTop - log.clientHeight < 40;
   log.innerHTML = '';
   for (const m of S.roomMsgs[room.id] || []) {
     const row = document.createElement('div');
     if (m.system) {
       row.className = 'bubble-row system';
       row.innerHTML = `<div class="bubble">${esc(m.text)}</div>`;
+    } else if (m.poll) {
+      // 채팅방 설문: 이 방 사람들만 참여하는 설문 카드
+      row.className = 'bubble-row poll-row';
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble poll-bubble';
+      bubble.innerHTML = `<span class="bwho">${esc(nameOf(m.from))} 님의 설문</span>`;
+      const box = document.createElement('div');
+      bubble.appendChild(box);
+      renderPoll(box, m.poll, (options) =>
+        send({ type: 'vote_room_poll', roomId: m.roomId, msgId: m.id, options }));
+      const t = document.createElement('span');
+      t.className = 'btime';
+      t.textContent = fmtTime(m.time);
+      bubble.appendChild(t);
+      row.appendChild(bubble);
     } else {
       const mine = m.from === S.me.id;
       row.className = 'bubble-row' + (mine ? ' mine' : '');
@@ -1224,18 +1268,57 @@ function renderRoomChat() {
     }
     log.appendChild(row);
   }
-  log.scrollTop = log.scrollHeight;
+  log.scrollTop = wasAtBottom ? log.scrollHeight : prevTop;
+  renderPending('room');
   markRoomSeen(room.id);
 }
 
-async function sendRoomMsg(files) {
+async function sendRoomMsg(extra) {
   const text = $('#roomText').value;
+  const files = [...S.roomFiles, ...(extra || [])];
   if (!S.currentRoom || (!text.trim() && !files.length)) return;
+  $('#roomSendBtn').disabled = true;
   try {
     const attachments = files.length ? await uploadFiles(files) : [];
     send({ type: 'room_message', roomId: S.currentRoom, text, attachments });
     $('#roomText').value = '';
+    S.roomFiles = [];
+    renderPending('room');
   } catch (e) { alert(e.message); }
+  finally { $('#roomSendBtn').disabled = false; }
+}
+
+// ---------- 대화/채팅방 전송 대기 첨부 ----------
+function pendingList(kind) { return kind === 'chat' ? S.chatFiles : S.roomFiles; }
+
+function renderPending(kind) {
+  const list = pendingList(kind);
+  const box = kind === 'chat' ? $('#chatPending') : $('#roomPending');
+  if (!box) return;
+  box.innerHTML = '';
+  box.style.display = list.length ? '' : 'none';
+  if (!list.length) return;
+  const head = document.createElement('span');
+  head.className = 'pending-head';
+  head.textContent = `첨부 ${list.length}개 — [전송]을 누르면 함께 보냅니다`;
+  box.appendChild(head);
+  list.forEach((f, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'pending-chip';
+    chip.innerHTML = `${IMG_EXT.test(f.name) ? '🖼' : VIDEO_EXT.test(f.name) ? '🎬' : '📎'}
+      <span class="att-name">${esc(f.name)}</span>
+      <span class="att-size">${fmtSize(f.size)}</span><span class="att-del" title="첨부 제거">✕</span>`;
+    chip.querySelector('.att-del').onclick = () => { list.splice(i, 1); renderPending(kind); };
+    box.appendChild(chip);
+  });
+}
+
+function addPendingFiles(kind, files) {
+  const list = pendingList(kind);
+  for (const f of files) {
+    if (!list.some(x => x.name === f.name && x.size === f.size)) list.push(f);
+  }
+  renderPending(kind);
 }
 
 function openRoomModal(mode) {
@@ -1278,10 +1361,44 @@ $('#roomText').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendRoomMsg([]); }
 });
 $('#roomAttachBtn').addEventListener('click', () => $('#roomFileInput').click());
-$('#roomFileInput').addEventListener('change', async () => {
-  const files = [...$('#roomFileInput').files];
+$('#roomFileInput').addEventListener('change', () => {
+  addPendingFiles('room', [...$('#roomFileInput').files]);
   $('#roomFileInput').value = '';
-  if (files.length) await sendRoomMsg(files);
+  $('#roomText').focus();
+});
+
+// ---------- 채팅방 설문 (참여자만 대상) ----------
+$('#roomPollBtn').addEventListener('click', () => {
+  const room = roomById(S.currentRoom);
+  if (!room) return;
+  $('#rpTarget').textContent =
+    `대상: ${room.name} — ${room.members.length}명 (${room.members.map(nameOf).join(', ')})`;
+  $('#rpQuestion').value = '';
+  $('#rpOptions').value = '';
+  $('#rpDeadline').value = localDatetimeValue(86400000); // 기본 마감: 하루 뒤
+  $('#rpMulti').checked = false;
+  $('#rpAnon').checked = false;
+  $('#rpError').textContent = '';
+  $('#roomPollModal').style.display = 'flex';
+  $('#rpQuestion').focus();
+});
+$('#rpCancel').addEventListener('click', () => { $('#roomPollModal').style.display = 'none'; });
+$('#rpOk').addEventListener('click', () => {
+  const room = roomById(S.currentRoom);
+  if (!room) return $('#rpError').textContent = '채팅방을 먼저 여세요.';
+  const q = $('#rpQuestion').value.trim();
+  if (!q) return $('#rpError').textContent = '질문을 입력하세요.';
+  const options = $('#rpOptions').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (options.length < 2) return $('#rpError').textContent = '설문 항목을 2개 이상 입력하세요.';
+  const deadline = new Date($('#rpDeadline').value).getTime();
+  if (!deadline || isNaN(deadline) || deadline < Date.now() + 60000) {
+    return $('#rpError').textContent = '마감 시각은 최소 1분 이후여야 합니다.';
+  }
+  send({
+    type: 'room_poll', roomId: room.id,
+    poll: { q, options, deadline, multi: $('#rpMulti').checked, anon: $('#rpAnon').checked }
+  });
+  $('#roomPollModal').style.display = 'none';
 });
 
 function renderNotices() {
@@ -1665,6 +1782,8 @@ function showTab(tab) {
 $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
 function openChat(peerId) {
+  // 대화 상대가 바뀌면 붙여 두었던 첨부는 비움 (엉뚱한 사람에게 전송 방지)
+  if (S.chatPeer !== peerId) { S.chatFiles = []; renderPending('chat'); }
   S.chatPeer = peerId;
   showTab('chat');
   $('#chatText').focus();
@@ -1690,6 +1809,7 @@ function openDetail(m, mode) {
     ? linkifyHtml(sanitizeHtml(m.html))
     : (m.text ? `<span style="${msgStyleCss(m)}">${linkify(m.text)}</span>` : '(내용 없음)');
   $('#detailFiles').innerHTML = attachmentLinks(m);
+  $('#detailPoll').innerHTML = ''; // 앞서 본 공지의 설문이 남지 않도록
   // 인쇄
   $('#detailPrint').style.display = '';
   $('#detailPrint').onclick = () => printMessage({
@@ -1740,29 +1860,57 @@ function openDetail(m, mode) {
   $('#detailModal').style.display = 'flex';
 }
 
-function pollHtml(n) {
-  const p = n.poll;
-  const votes = p.votes || {};
-  const total = Object.keys(votes).length;
-  const counts = p.options.map((_, i) => Object.values(votes).filter(v => v === i).length);
-  const myVote = votes[S.me.id];
+// ---------- 설문조사 (공지 / 채팅방 공용) ----------
+// p는 서버가 보내 주는 보기용 설문 객체:
+//   { q, options[], deadline, multi, anon, counts[], total, mine[], voters[][] (공개 설문일 때만) }
+let pollSeq = 0;
+
+function pollHtml(p, name) {
   const closed = Date.now() > p.deadline;
-  let html = `<div class="poll-box"><b>📊 설문조사</b>`;
+  const mine = p.mine || [];
+  const type = p.multi ? 'checkbox' : 'radio';
+  let html = `<div class="poll-box"><div class="poll-title"><b>📊 ${p.q ? esc(p.q) : '설문조사'}</b>
+    <span class="poll-tag">${p.multi ? '여러 개 선택' : '하나만 선택'}</span>
+    <span class="poll-tag">${p.anon ? '익명 투표' : '투표자 공개'}</span></div>`;
   p.options.forEach((opt, i) => {
-    const pct = total ? Math.round(counts[i] / total * 100) : 0;
+    const cnt = (p.counts || [])[i] || 0;
+    const pct = p.total ? Math.round(cnt / p.total * 100) : 0;
+    const voted = mine.includes(i);
     html += `<div class="poll-opt">
-      <input type="radio" name="pollVote" value="${i}" ${myVote === i ? 'checked' : ''} ${closed ? 'disabled' : ''}>
-      <span>${esc(opt)}${myVote === i ? ' ✔' : ''}</span>
+      <label class="poll-pick"><input type="${type}" name="${name}" value="${i}" ${voted ? 'checked' : ''} ${closed ? 'disabled' : ''}>
+      <span>${esc(opt)}${voted ? ' ✔' : ''}</span></label>
       <span class="poll-bar-wrap"><span class="poll-bar" style="width:${pct}%"></span></span>
-      <span class="poll-cnt">${counts[i]}표 (${pct}%)</span>
+      <span class="poll-cnt">${cnt}표 (${pct}%)</span>
     </div>`;
+    if (p.voters) {
+      const names = (p.voters[i] || []).map(uid => nameOf(uid));
+      html += `<div class="poll-voters">${names.length ? '└ ' + esc(names.join(', ')) : '└ 아직 없음'}</div>`;
+    }
   });
-  html += `<div class="poll-meta">참여 ${total}명 · 마감: ${fmtFull(p.deadline)} `;
+  html += `<div class="poll-meta">참여 ${p.total || 0}명 · 마감: ${fmtFull(p.deadline)} `;
   html += closed ? '<span class="poll-closed">(마감됨)</span>' : '';
   html += '</div>';
-  if (!closed) html += `<div style="margin-top:8px"><button id="pollVoteBtn" class="primary">${myVote === undefined ? '투표하기' : '투표 변경'}</button></div>`;
+  if (!closed) {
+    html += `<div class="poll-btns"><button class="primary poll-vote-btn">${mine.length ? '투표 변경' : '투표하기'}</button>`;
+    if (mine.length) html += '<button class="poll-cancel-btn">투표 취소</button>';
+    html += '</div>';
+  }
   html += '</div>';
   return html;
+}
+
+// 설문을 container에 그리고 투표 버튼을 연결 (onVote: 선택한 항목 번호 배열)
+function renderPoll(container, poll, onVote) {
+  const name = 'pollVote' + (++pollSeq);
+  container.innerHTML = pollHtml(poll, name);
+  const btn = container.querySelector('.poll-vote-btn');
+  if (btn) btn.onclick = () => {
+    const sel = [...container.querySelectorAll(`input[name="${name}"]:checked`)].map(el => Number(el.value));
+    if (!sel.length) return alert('항목을 선택하세요.');
+    onVote(sel);
+  };
+  const cancel = container.querySelector('.poll-cancel-btn');
+  if (cancel) cancel.onclick = () => { if (confirm('투표를 취소할까요?')) onVote([]); };
 }
 
 // 쪽지/공지 인쇄: 인쇄 영역에 내용을 채우고 시스템 인쇄 대화상자 호출
@@ -1792,15 +1940,11 @@ function openNoticeDetail(n) {
   $('#detailBody').innerHTML = n.body ? linkify(n.body) : '(내용 없음)';
   // 첨부파일 + 설문
   $('#detailFiles').innerHTML =
-    ((n.attachments || []).length ? attachmentLinks({ attachments: n.attachments }) : '') +
-    (n.poll ? pollHtml(n) : '');
-  if (n.poll && Date.now() <= n.poll.deadline) {
-    const btn = document.getElementById('pollVoteBtn');
-    if (btn) btn.onclick = () => {
-      const sel = document.querySelector('input[name=pollVote]:checked');
-      if (!sel) return alert('항목을 선택하세요.');
-      send({ type: 'vote_poll', noticeId: n.id, option: Number(sel.value) });
-    };
+    (n.attachments || []).length ? attachmentLinks({ attachments: n.attachments }) : '';
+  const pollBox = $('#detailPoll');
+  pollBox.innerHTML = '';
+  if (n.poll) {
+    renderPoll(pollBox, n.poll, (options) => send({ type: 'vote_poll', noticeId: n.id, options }));
   }
   $('#detailRecall').style.display = 'none';
   $('#detailDelete').style.display = 'none';
@@ -2268,25 +2412,76 @@ $('#composeSend').addEventListener('click', async () => {
 });
 
 // ---------- 대화 전송 ----------
-async function sendChat(files) {
+async function sendChat(extra) {
   const text = $('#chatText').value;
+  const files = [...S.chatFiles, ...(extra || [])];
   if (!S.chatPeer || (!text.trim() && !files.length)) return;
+  $('#chatSendBtn').disabled = true;
   try {
     const attachments = files.length ? await uploadFiles(files) : [];
     send({ type: 'send_message', to: [S.chatPeer], text, attachments });
     $('#chatText').value = '';
+    S.chatFiles = [];
+    renderPending('chat');
   } catch (e) { alert(e.message); }
+  finally { $('#chatSendBtn').disabled = false; }
 }
 $('#chatSendBtn').addEventListener('click', () => sendChat([]));
 $('#chatText').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat([]); }
 });
 $('#chatAttachBtn').addEventListener('click', () => $('#chatFileInput').click());
-$('#chatFileInput').addEventListener('change', async () => {
-  const files = [...$('#chatFileInput').files];
+$('#chatFileInput').addEventListener('change', () => {
+  addPendingFiles('chat', [...$('#chatFileInput').files]);
   $('#chatFileInput').value = '';
-  if (files.length) await sendChat(files);
+  $('#chatText').focus();
 });
+
+// ---------- 회원가입 요청 승인 (관리자) ----------
+function renderSignups() {
+  const admin = !!(S.me && S.me.admin);
+  const list = S.signups || [];
+  $('#signupMgrBtn').style.display = admin ? '' : 'none';
+  const badge = $('#signupBadge');
+  badge.style.display = admin && list.length ? '' : 'none';
+  badge.textContent = list.length;
+  const box = $('#signupMgrList');
+  box.innerHTML = '';
+  if (!list.length) {
+    box.innerHTML = '<div class="empty">대기 중인 가입 요청이 없습니다.</div>';
+    return;
+  }
+  for (const s of list) {
+    const el = document.createElement('div');
+    el.className = 'signup-item';
+    el.innerHTML = `<div class="su-line"><b>${esc(s.name)}</b>
+        <span class="su-id">${esc(s.id)}</span><span class="spacer"></span>
+        <span class="when">${fmtFull(s.time)}</span></div>
+      <div class="su-detail">부서: ${esc(s.dept || '-')} · 직위: ${esc(s.position || '-')}${s.subject ? ' · 과목: ' + esc(s.subject) : ''}<br>
+        사무실 전화: ${esc(s.phone || '-')}${s.mobile ? ' · 핸드폰: ' + esc(s.mobile) : ''}${s.email ? ' · ' + esc(s.email) : ''}</div>
+      <div class="su-btns"><button class="primary su-ok">✔ 승인</button><button class="su-no danger-text">✕ 거절</button></div>`;
+    el.querySelector('.su-ok').onclick = () => {
+      if (confirm(`${s.name}(${s.id}) 님의 가입을 승인할까요?\n승인하면 바로 로그인할 수 있습니다.`)) {
+        send({ type: 'approve_signup', reqId: s.reqId });
+      }
+    };
+    el.querySelector('.su-no').onclick = () => {
+      if (confirm(`${s.name}(${s.id}) 님의 가입 요청을 거절할까요?\n요청 내용이 삭제됩니다.`)) {
+        send({ type: 'reject_signup', reqId: s.reqId });
+      }
+    };
+    box.appendChild(el);
+  }
+}
+
+function openSignupMgr() {
+  if (!S.me || !S.me.admin) return;
+  send({ type: 'list_signups' }); // 최신 목록으로 갱신
+  renderSignups();
+  $('#signupMgrModal').style.display = 'flex';
+}
+$('#signupMgrBtn').addEventListener('click', openSignupMgr);
+$('#signupMgrClose').addEventListener('click', () => { $('#signupMgrModal').style.display = 'none'; });
 
 // ---------- 공지 ----------
 function localDatetimeValue(msFromNow) {
@@ -2352,6 +2547,11 @@ function openNoticeModal(pollOnly, editNotice) {
   $('#noticePollChkRow').style.display = (pollOnly || n) ? 'none' : '';
   $('#noticePollBox').style.display = hasPoll ? '' : 'none';
   $('#pollOptions').disabled = !!n; // 수정 시 항목 변경 불가, 마감 시각만 조정
+  // 선택 방식/공개 여부도 등록할 때만 정할 수 있음 (투표가 시작된 뒤에는 바뀌면 안 됨)
+  $('#pollMulti').checked = n && n.poll ? !!n.poll.multi : false;
+  $('#pollAnon').checked = n && n.poll ? !!n.poll.anon : false;
+  $('#pollMulti').disabled = !!n;
+  $('#pollAnon').disabled = !!n;
   if (n && n.poll) $('#pollDeadline').value = localDatetimeValue(n.poll.deadline - Date.now());
   else if (pollOnly) $('#pollDeadline').value = localDatetimeValue(7 * 86400000);
   $('#noticeSchedRow').style.display = (pollOnly || n) ? 'none' : ''; // 설문/수정은 예약 숨김
@@ -2403,7 +2603,8 @@ $('#noticePost').addEventListener('click', async () => {
     } else {
       const options = $('#pollOptions').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       if (options.length < 2) return $('#noticeError').textContent = '설문 항목을 2개 이상 입력하세요.';
-      payload.poll = { options, deadline };
+      // 공지는 제목이 곧 설문 제목이므로 q는 비워 둔다 (채팅방 설문만 별도 질문을 가짐)
+      payload.poll = { options, deadline, multi: $('#pollMulti').checked, anon: $('#pollAnon').checked };
     }
   }
   if (!editing && $('#noticeSchedChk').checked) {
@@ -2680,7 +2881,8 @@ $('#dlDirBtn').addEventListener('click', () => window.native.openDownloadDir());
 const MODAL_CLOSE_BTN = {
   detailModal: '#detailClose', noticeModal: '#noticeCancel', groupModal: '#groupModalCancel',
   adminModal: '#adminClose', roomModal: '#roomModalCancel', settingsModal: '#settingsClose',
-  profileModal: '#pwCancel', deptRenameModal: '#drCancel', aboutModal: '#aboutClose', signupModal: '#signupCancel'
+  profileModal: '#pwCancel', deptRenameModal: '#drCancel', aboutModal: '#aboutClose', signupModal: '#signupCancel',
+  roomPollModal: '#rpCancel', signupMgrModal: '#signupMgrClose'
 };
 for (const [modalId, closeSel] of Object.entries(MODAL_CLOSE_BTN)) {
   const modal = document.querySelector('#' + modalId + ' .modal');
@@ -2739,17 +2941,13 @@ setupDropZone(document.querySelector('#composeModal .modal'), (files) => {
   }
 });
 
-// 1:1 대화: 떨어뜨리면 확인 후 바로 전송
-setupDropZone($('#tab-chat'), async (files) => {
-  if (!S.chatPeer) return;
-  if (confirm(`파일 ${files.length}개를 ${nameOf(S.chatPeer)} 님에게 보낼까요?`)) await sendChat(files);
+// 1:1 대화 / 채팅방: 떨어뜨린 파일을 입력창 위에 첨부해 두고 [전송]으로 보냄
+// (드롭 중에는 브라우저가 확인창을 막기 때문에 확인 없이 바로 첨부한다)
+setupDropZone($('#tab-chat'), (files) => {
+  if (S.chatPeer) addPendingFiles('chat', files);
 });
-
-// 채팅방: 떨어뜨리면 확인 후 바로 전송
-setupDropZone($('#tab-rooms'), async (files) => {
-  const room = roomById(S.currentRoom);
-  if (!room) return;
-  if (confirm(`파일 ${files.length}개를 '${room.name}' 채팅방에 보낼까요?`)) await sendRoomMsg(files);
+setupDropZone($('#tab-rooms'), (files) => {
+  if (roomById(S.currentRoom)) addPendingFiles('room', files);
 });
 
 // ---------- 파일 다운로드 진행 표시 ----------

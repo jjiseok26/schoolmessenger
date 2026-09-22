@@ -44,8 +44,10 @@ schoolmessenger/
 users:   { id, name, dept(대표 부서), depts[](다중 소속), position, office, subject, phone, mobile, email,
            admin(bool), salt, pw(hash) }
 messages:{ id, from, to[], text, attachments[{name,size,url}], time, readBy[], deletedBy[], scheduled? }
-notices: { id, authorId, authorName, title, body, time, poll?{options[], deadline, votes{userId:optIdx}} }
-rooms:   { id, name, creator, members[], time } / roomMsgs: { id, roomId, from, text, attachments, time, system? }
+notices: { id, authorId, authorName, title, body, time, poll? }
+poll:    { q, options[], deadline, multi(복수선택), anon(투표자 미공개), votes{ userId: [optIdx,...] } }
+         — 예전 형식(votes{userId:optIdx})은 불러올 때 배열로 자동 변환
+rooms:   { id, name, creator, members[], time } / roomMsgs: { id, roomId, from, text, attachments, time, system?, poll? }
 scheduled:        예약 쪽지 { id, from, to[], text, attachments, sendAt, created }
 scheduledNotices: 예약 공지 { id, authorId, authorName, title, body, poll, publishAt }
 userGroups: 개인 사용자 그룹 { id, owner, name, members[] }
@@ -64,22 +66,31 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 - 로그인 전 허용: `login{id,pw}`, `signup_request{...}`
 - `login_ok` 응답에 포함: token, schoolName, clientUpdate(버전), user, users[], messages(내 것 최근 500, deletedBy 제외),
   notices(최근 100), rooms+roomMsgs(방별 최근 100), scheduled(내 예약쪽지), groups(내 그룹),
-  scheduledNotices(내 예약공지), deptOrder, userOrder, extraDepts
+  scheduledNotices(내 예약공지), deptOrder, userOrder, extraDepts, signups(관리자만 — 승인 대기 목록)
 - 중복 로그인 시 기존 세션에 `kicked` 보내고 종료
 - 쪽지: `send_message{to[],text,attachments,sendAt?}` (sendAt이 미래면 예약 → `scheduled_added`),
   `read`→`read_receipt`, `recall_message`(안 읽은 것만, 전체 삭제), `delete_message`(내 보관함만; 전원이 삭제하면 완전 제거),
   `cancel_scheduled`
 - 상태: `set_status(online/away/class/meeting)` → presence 브로드캐스트(online, status)
-- 채팅방: `create_room`, `room_message`, `add_room_members`, `leave_room` (+입장/퇴장 시스템 메시지)
-- 공지: `post_notice{title,body,poll?{options,deadline},publishAt?}`(관리자만),
-  `vote_poll`(마감 전 변경 가능, `notice_updated` 브로드캐스트), `delete_notice`, `cancel_scheduled_notice`
+- 채팅방: `create_room`, `room_message`, `add_room_members`, `leave_room` (+입장/퇴장 시스템 메시지),
+  `room_poll{roomId, poll{q,options,deadline,multi,anon}}` → 방 참여자에게만 설문 메시지 전송(일부 인원 대상 설문),
+  `vote_room_poll{roomId,msgId,options[]}` → `room_message_updated`(참여자에게만)
+- 공지: `post_notice{title,body,poll?{options,deadline,multi,anon},publishAt?}`(누구나),
+  `vote_poll{noticeId, options[]}`(마감 전 변경 가능, 빈 배열이면 투표 취소, `notice_updated`), `delete_notice`, `cancel_scheduled_notice`
+- **설문 전송 규칙**: 서버는 저장된 votes를 그대로 보내지 않고 보는 사람별로 가공해서 보냄 —
+  `{q, options, deadline, multi, anon, counts[], total, mine[], voters[][]}`.
+  `anon:true`면 `voters`와 원본 votes를 **아예 보내지 않음**(개발자 도구로도 볼 수 없게). 공개 설문은 항목별 투표자 id 배열 포함.
+  그래서 공지/채팅방 설문 브로드캐스트는 사용자별 개별 전송(`_broadcastNotice`, `_sendRoomMsg`)
 - 그룹: `save_group{id?,name,members}`, `delete_group` (소유자만)
 - 프로필: `update_profile{office,subject,phone,mobile,email}`, `change_pw{oldPw,newPw}`
 - 관리자 전용: `admin_add_user/admin_update_user/admin_delete_user`(→`admin_result`),
   `set_dept_order`, `set_user_order{dept,order}`, `rename_dept{from[],to}`(여러 부서 병합 가능, deptOrder/userOrder/extraDepts 동기화),
   `add_dept`/`delete_dept`(빈 부서, extraDepts)
 - 회원가입: `signup_request` 필수 항목 = 아이디/비밀번호/이름/부서/직위/사무실전화 (과목·핸드폰·이메일 선택).
-  접수 시 **접속 중인 관리자 권한 사용자 전원에게 `signup_alert`** 전송. 승인/거절은 서버 관리 화면에서 (승인 시 요청 때 해시된 비밀번호 그대로 계정 생성)
+  접수 시 **접속 중인 관리자 권한 사용자 전원에게 `signup_alert` + `signups{list}`** 전송.
+  관리자는 메신저에서 바로 처리: `list_signups` → `signups{list}`, `approve_signup{reqId}` / `reject_signup{reqId}` → `signup_handled{ok,action,name,id}`
+  (관리자 권한 검사 필수). 서버 관리 화면에서 처리해도 접속 중인 관리자에게 `signups`를 다시 보내 목록이 즉시 갱신됨.
+  승인 시 요청 때 해시된 비밀번호 그대로 계정 생성
 - 타이머(10초): 예약 쪽지 발송, 예약 공지 게시 (서버 재시작 시 밀린 것 즉시 처리). 6시간마다 보관함 자동 정리
 
 ### 활동 로그
@@ -127,11 +138,16 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
   - 목록 항목에 **[공지](주황)/[쪽지](파랑) 라벨** + 아바타 + 미리보기 + 안읽음 강조/배지
   - 쪽지: 다중 수신자(부서 단위 선택 가능), 첨부 여러 번 누적 추가+개별 삭제+드래그앤드롭, 예약 발송(취소 가능),
     읽음 확인(누가 읽었는지), 답장/전달(첨부 포함)/회수(안 읽은 것만)/삭제(내 보관함만), 검색
-  - 대화: 1:1 실시간 채팅(말풍선, 읽음 표시), 파일 드롭 전송
-  - 채팅방: 그룹 채팅, 초대/나가기, 안읽음 수, 시스템 메시지
-  - 공지: 관리자만 작성(설문조사: 항목+마감시각, 실시간 막대그래프 결과, 마감 후 투표 불가 / 예약 공지: 시각 지정, 목록 상단에 취소 가능 표시)
+  - 대화/채팅방 공통 첨부: 📎 버튼이나 **드래그앤드롭**으로 입력창 위 "첨부 N개" 줄에 쌓아 두고 [전송]으로 함께 발송, 칩의 ✕로 개별 취소,
+    상대/방을 바꾸면 대기 첨부는 비움. (드롭 중에는 브라우저가 `confirm()`을 무시하므로 확인창을 쓰면 안 됨 — 바로 첨부한다)
+  - 채팅방: 그룹 채팅, 초대/나가기, 안읽음 수, 시스템 메시지, **📊 설문 버튼**(방 참여자만 대상, 대화 흐름에 설문 카드로 표시)
+  - 공지: 누구나 작성(설문조사: 항목+마감시각+선택방식+공개여부, 실시간 막대그래프 결과, 마감 후 투표 불가 / 예약 공지: 시각 지정, 목록 상단에 취소 가능 표시)
+  - 설문 카드(공지·채팅방 공용): 제목 옆에 `여러 개 선택/하나만 선택`·`투표자 공개/익명 투표` 라벨,
+    복수 선택이면 체크박스·아니면 라디오, 항목별 막대그래프+표수+비율, 공개 설문은 항목 아래 투표자 이름(없으면 "아직 없음"),
+    투표하기/투표 변경/투표 취소 버튼. 선택 방식·공개 여부는 만들 때만 정할 수 있고 이후 수정 불가
 - 본문 URL 자동 링크화(기본 브라우저로 열기, `/files/` 다운로드는 예외 처리)
-- 알림: 데스크톱 알림+작업표시줄 깜빡임+알림음(끄기 가능), 클릭 시 창 복원. 관리자에게 회원가입 알림
+- 알림: 데스크톱 알림+작업표시줄 깜빡임+알림음(끄기 가능), 클릭 시 창 복원.
+  관리자에게 회원가입 알림 → 알림을 누르면 승인 창이 열림. 헤더에 **[🔔 가입요청]** 버튼(대기 건수 배지)과 승인/거절 모달(요청자 정보 표시)
 - 다운로드: 저장 대화상자 없이 다운로드 폴더에 저장, **같은 이름이면 `이름 (1).ext` 자동 번호**, 우하단 **진행률 패널**(%, 용량, 완료 시 "폴더에서 보기")
 - 이미지 첨부는 대화/쪽지에서 미리보기, 전화번호 입력은 blur 시 자동 하이픈(02/지역번호/휴대폰 구분, 문구 섞이면 그대로)
 - 설정: Windows 시작 시 자동 실행, 알림음, 다크 모드(전체 화면 대응, localStorage 저장)
@@ -148,6 +164,10 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 ## 6. 검증 (필수)
 
 - 서버 코어를 단독 node로 띄워 WebSocket 자동 테스트 작성: 로그인/거부/kick, 쪽지 송수신/읽음/회수/삭제, 예약 쪽지·공지,
-  설문 투표/마감, 채팅방 생성/초대/나가기/비멤버 차단, 그룹 CRUD/타인 수정 차단, 관리자 권한 검사(부서 순서/이름변경/계정 CRUD),
-  회원가입(필수 누락/중복/승인/거절/관리자 알림), 다중 부서, CORS 헤더, 파일 업로드/다운로드/무인증 거부, 활동 로그, DB 저장
+  설문 투표/마감/복수선택/투표취소/익명 설문의 투표자 비노출/예전 형식 마이그레이션, 채팅방 설문(비멤버 차단),
+  채팅방 생성/초대/나가기/비멤버 차단, 그룹 CRUD/타인 수정 차단, 관리자 권한 검사(부서 순서/이름변경/계정 CRUD),
+  회원가입(필수 누락/중복/승인/거절/관리자 알림/일반 사용자의 승인 시도 차단), 다중 부서, CORS 헤더,
+  파일 업로드/다운로드/무인증 거부, 활동 로그, DB 저장
+- 클라이언트 UI는 `electron.exe . --remote-debugging-port=<포트>`로 띄우고 CDP(`Runtime.evaluate`)로 실제 화면을 조작해 검증
+  (로그인 → 설문 만들기/투표/투표자 표시, 드래그앤드롭 첨부, 가입 승인까지). `confirm/alert`은 테스트 중 임시 대체
 - 빌드 후 패키징된 exe를 실제 실행해 /health, 로그인, 클라이언트 창 표시 확인

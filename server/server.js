@@ -61,6 +61,25 @@ function parseDepts(v) {
   return out.length ? out.slice(0, 10) : ['미지정'];
 }
 
+// 설문 객체 정규화 — 저장 형태: { options[], deadline, multi, anon, votes: { userId: [항목번호...] } }
+// 예전 형식(votes: { userId: 번호 })도 배열로 변환해 그대로 사용한다.
+function normalizePoll(p) {
+  if (!p || !Array.isArray(p.options) || p.options.length < 2) return null;
+  const options = p.options.map(o => String(o).trim().slice(0, 100)).filter(Boolean);
+  if (options.length < 2) return null;
+  const votes = {};
+  for (const [uid, v] of Object.entries(p.votes || {})) {
+    const arr = [...new Set((Array.isArray(v) ? v : [v]).map(Number))]
+      .filter(i => Number.isInteger(i) && i >= 0 && i < options.length);
+    if (arr.length) votes[uid] = arr;
+  }
+  return {
+    q: String(p.q || '').slice(0, 200),
+    options, deadline: Number(p.deadline) || 0,
+    multi: !!p.multi, anon: !!p.anon, votes
+  };
+}
+
 class MessengerServer {
   constructor(dataDir) {
     this.dataDir = dataDir;
@@ -131,6 +150,15 @@ class MessengerServer {
       db.userGroups = db.userGroups || [];
       db.scheduledNotices = db.scheduledNotices || [];
       db.signups = db.signups || [];
+      // 설문 마이그레이션: 단일 선택 번호 → 배열, multi/anon 기본값 부여
+      for (const list of [db.notices, db.scheduledNotices, db.roomMsgs]) {
+        for (const item of list) {
+          if (item.poll) {
+            const p = normalizePoll(item.poll);
+            if (p) item.poll = p; else delete item.poll;
+          }
+        }
+      }
       return db;
     }
   }
@@ -358,6 +386,69 @@ class MessengerServer {
     }
   }
 
+  // ---------- 설문 ----------
+  // 보는 사람에게 보낼 설문 정보. 미공개 설문이면 누가 투표했는지는 아예 보내지 않는다.
+  _pollView(poll, viewerId) {
+    const votes = poll.votes || {};
+    const counts = poll.options.map(() => 0);
+    const voters = poll.options.map(() => []);
+    for (const [uid, v] of Object.entries(votes)) {
+      for (const i of (Array.isArray(v) ? v : [v])) { // 예전 형식(번호 하나)도 안전하게 처리
+        if (counts[i] === undefined) continue;
+        counts[i]++;
+        if (!poll.anon) voters[i].push(uid);
+      }
+    }
+    const view = {
+      q: poll.q || '', options: poll.options, deadline: poll.deadline,
+      multi: !!poll.multi, anon: !!poll.anon,
+      counts, total: Object.keys(votes).length,
+      mine: Array.isArray(votes[viewerId]) ? votes[viewerId] : (votes[viewerId] !== undefined ? [votes[viewerId]] : [])
+    };
+    if (!poll.anon) view.voters = voters;
+    return view;
+  }
+
+  _noticeView(n, viewerId) {
+    return n.poll ? { ...n, poll: this._pollView(n.poll, viewerId) } : n;
+  }
+
+  _roomMsgView(m, viewerId) {
+    return m.poll ? { ...m, poll: this._pollView(m.poll, viewerId) } : m;
+  }
+
+  // 공지는 사람마다 설문 내용이 달라질 수 있어 개인별로 전송한다.
+  _broadcastNotice(type, n) {
+    for (const [uid, ws] of this.sockets) this._send(ws, { type, notice: this._noticeView(n, uid) });
+  }
+
+  // 클라이언트가 보낸 설문 설정 검증 → 저장용 설문 객체
+  _parsePoll(raw) {
+    if (!raw || !Array.isArray(raw.options)) return { poll: null };
+    const options = raw.options.map(o => String(o).trim().slice(0, 100)).filter(Boolean).slice(0, 10);
+    if (options.length < 2) return { error: '설문 항목은 2개 이상이어야 합니다.' };
+    const deadline = Number(raw.deadline) || 0;
+    if (deadline <= Date.now()) return { error: '설문 마감 시각은 미래여야 합니다.' };
+    return {
+      poll: {
+        q: String(raw.q || '').trim().slice(0, 200),
+        options, deadline, multi: !!raw.multi, anon: !!raw.anon, votes: {}
+      }
+    };
+  }
+
+  // 투표 반영. 선택이 비어 있으면 투표 취소. 반환값: 오류 메시지 또는 null
+  _applyVote(poll, userId, raw) {
+    if (Date.now() > poll.deadline) return '설문이 마감되었습니다.';
+    let opts = [...new Set((Array.isArray(raw) ? raw : [raw]).map(Number))]
+      .filter(i => Number.isInteger(i) && i >= 0 && i < poll.options.length);
+    if (!poll.multi) opts = opts.slice(0, 1);
+    poll.votes = poll.votes || {};
+    if (opts.length) poll.votes[userId] = opts;
+    else delete poll.votes[userId];
+    return null;
+  }
+
   _publicUser(u) {
     const online = this.sockets.has(u.id);
     return {
@@ -394,6 +485,8 @@ class MessengerServer {
       case 'set_status': return this._doSetStatus(ws, msg);
       case 'create_room': return this._doCreateRoom(ws, msg);
       case 'room_message': return this._doRoomMessage(ws, msg);
+      case 'room_poll': return this._doRoomPoll(ws, msg);
+      case 'vote_room_poll': return this._doVoteRoomPoll(ws, msg);
       case 'add_room_members': return this._doAddRoomMembers(ws, msg);
       case 'leave_room': return this._doLeaveRoom(ws, msg);
       case 'post_notice': return this._doPostNotice(ws, msg);
@@ -411,6 +504,9 @@ class MessengerServer {
       case 'admin_add_user': return this._doAdminAddUser(ws, msg);
       case 'admin_update_user': return this._doAdminUpdateUser(ws, msg);
       case 'admin_delete_user': return this._doAdminDeleteUser(ws, msg);
+      case 'list_signups': return this._doListSignups(ws);
+      case 'approve_signup': return this._doApproveSignup(ws, msg);
+      case 'reject_signup': return this._doRejectSignup(ws, msg);
       case 'change_pw': return this._doChangePw(ws, msg);
       case 'update_profile': return this._doUpdateProfile(ws, msg);
       case 'ping': return this._send(ws, { type: 'pong' });
@@ -446,7 +542,7 @@ class MessengerServer {
     const myRooms = this.db.rooms.filter(r => r.members.includes(id));
     const roomMsgs = {};
     for (const r of myRooms) {
-      roomMsgs[r.id] = this.db.roomMsgs.filter(m => m.roomId === r.id).slice(-100);
+      roomMsgs[r.id] = this._roomHistory(r.id, id);
     }
     this._send(ws, {
       type: 'login_ok',
@@ -456,7 +552,8 @@ class MessengerServer {
       user: this._publicUser(user),
       users: this.db.users.map(u => this._publicUser(u)),
       messages: recent,
-      notices: this.db.notices.slice(-100),
+      notices: this.db.notices.slice(-100).map(n => this._noticeView(n, id)),
+      signups: user.admin ? this.listSignups() : [],
       rooms: myRooms,
       roomMsgs,
       scheduled: this.db.scheduled.filter(s => s.from === id),
@@ -614,7 +711,7 @@ class MessengerServer {
         };
         if (s.poll) n.poll = s.poll;
         this.db.notices.push(n);
-        this._broadcast({ type: 'notice', notice: n });
+        this._broadcastNotice('notice', n);
       }
       this._saveSoon();
     }
@@ -735,8 +832,14 @@ class MessengerServer {
       .filter(a => a.url.startsWith('/files/'));
   }
 
-  _roomHistory(roomId) {
-    return this.db.roomMsgs.filter(m => m.roomId === roomId).slice(-100);
+  _roomHistory(roomId, viewerId) {
+    return this.db.roomMsgs.filter(m => m.roomId === roomId).slice(-100)
+      .map(m => this._roomMsgView(m, viewerId));
+  }
+
+  // 채팅방 메시지를 참여자별로 전송 (설문이 있으면 각자 볼 수 있는 형태로)
+  _sendRoomMsg(room, m, type = 'room_message') {
+    for (const uid of room.members) this._sendTo(uid, { type, message: this._roomMsgView(m, uid) });
   }
 
   _pushRoomSystemMsg(room, text) {
@@ -768,7 +871,37 @@ class MessengerServer {
     const m = { id: newId(), roomId: room.id, from: ws.userId, text, attachments, time: Date.now() };
     this.db.roomMsgs.push(m);
     this._saveSoon();
-    for (const uid of room.members) this._sendTo(uid, { type: 'room_message', message: m });
+    this._sendRoomMsg(room, m);
+  }
+
+  // 채팅방 설문 만들기 — 채팅방 참여자만 대상이 되는 소규모 설문
+  _doRoomPoll(ws, msg) {
+    const room = this.db.rooms.find(r => r.id === msg.roomId);
+    if (!room || !room.members.includes(ws.userId)) return;
+    const { poll, error } = this._parsePoll(msg.poll);
+    if (error) return this._send(ws, { type: 'error', error });
+    if (!poll) return this._send(ws, { type: 'error', error: '설문 항목을 입력하세요.' });
+    const user = this.db.users.find(u => u.id === ws.userId);
+    const m = {
+      id: newId(), roomId: room.id, from: ws.userId,
+      text: '📊 설문: ' + (poll.q || poll.options.join(' / ')),
+      attachments: [], poll, time: Date.now()
+    };
+    this.db.roomMsgs.push(m);
+    this._saveSoon();
+    this.log(`채팅방 설문: "${poll.q}" — ${user ? user.name : ws.userId} (${room.name}, 대상 ${room.members.length}명)`);
+    this._sendRoomMsg(room, m);
+  }
+
+  _doVoteRoomPoll(ws, msg) {
+    const room = this.db.rooms.find(r => r.id === msg.roomId);
+    if (!room || !room.members.includes(ws.userId)) return;
+    const m = this.db.roomMsgs.find(x => x.id === msg.msgId && x.roomId === room.id);
+    if (!m || !m.poll) return;
+    const error = this._applyVote(m.poll, ws.userId, msg.options);
+    if (error) return this._send(ws, { type: 'error', error });
+    this._saveSoon();
+    this._sendRoomMsg(room, m, 'room_message_updated');
   }
 
   _doAddRoomMembers(ws, msg) {
@@ -780,7 +913,7 @@ class MessengerServer {
     room.members.push(...add);
     this._saveSoon();
     for (const uid of add) {
-      this._sendTo(uid, { type: 'room_created', room, history: this._roomHistory(room.id) });
+      this._sendTo(uid, { type: 'room_created', room, history: this._roomHistory(room.id, uid) });
     }
     for (const uid of room.members) {
       if (!add.includes(uid)) this._sendTo(uid, { type: 'room_updated', room });
@@ -811,15 +944,10 @@ class MessengerServer {
     const title = String(msg.title || '').trim().slice(0, 200);
     const body = String(msg.body || '').slice(0, MAX_TEXT_LEN);
     if (!title) return;
-    // 설문조사 (선택): 항목 2개 이상 + 미래의 마감 시각
-    let poll = null;
-    if (msg.poll && Array.isArray(msg.poll.options)) {
-      const options = msg.poll.options.map(o => String(o).trim().slice(0, 100)).filter(Boolean).slice(0, 10);
-      const deadline = Number(msg.poll.deadline) || 0;
-      if (options.length < 2) return this._send(ws, { type: 'error', error: '설문 항목은 2개 이상이어야 합니다.' });
-      if (deadline <= Date.now()) return this._send(ws, { type: 'error', error: '설문 마감 시각은 미래여야 합니다.' });
-      poll = { options, deadline, votes: {} };
-    }
+    // 설문조사 (선택): 항목 2개 이상 + 미래의 마감 시각 + 복수선택/투표자 공개 여부
+    const parsed = this._parsePoll(msg.poll);
+    if (parsed.error) return this._send(ws, { type: 'error', error: parsed.error });
+    const poll = parsed.poll;
     // 공지 첨부파일 (선택)
     const attachments = this._cleanAttachments(msg.attachments);
     // 예약 공지 (선택)
@@ -841,7 +969,7 @@ class MessengerServer {
     this.db.notices.push(n);
     this._saveSoon();
     this.log(`공지 등록: "${title}" — ${user.name}${poll ? ' (설문 포함)' : ''}${attachments.length ? ` (첨부 ${attachments.length}개)` : ''}`);
-    this._broadcast({ type: 'notice', notice: n });
+    this._broadcastNotice('notice', n);
   }
 
   // 공지 수정 (작성자 본인 또는 관리자)
@@ -859,27 +987,24 @@ class MessengerServer {
     n.attachments = this._cleanAttachments(msg.attachments);
     n.edited = Date.now();
     n.editedBy = user.name;
-    // 설문 마감 시각만 연장/변경 가능 (기존 투표 유지, 항목은 그대로)
+    // 설문 마감 시각만 연장/변경 가능 (기존 투표·항목·선택 방식은 그대로)
     if (n.poll && msg.pollDeadline) {
       const dl = Number(msg.pollDeadline) || 0;
       if (dl > Date.now()) n.poll.deadline = dl;
     }
     this._saveSoon();
     this.log(`공지 수정: "${title}" — ${user.name}`);
-    this._broadcast({ type: 'notice_updated', notice: n });
+    this._broadcastNotice('notice_updated', n);
   }
 
   _doVotePoll(ws, msg) {
     const n = this.db.notices.find(x => x.id === msg.noticeId);
     if (!n || !n.poll) return;
-    if (Date.now() > n.poll.deadline) {
-      return this._send(ws, { type: 'error', error: '설문이 마감되었습니다.' });
-    }
-    const opt = Number(msg.option);
-    if (!Number.isInteger(opt) || opt < 0 || opt >= n.poll.options.length) return;
-    n.poll.votes[ws.userId] = opt;
+    // 예전 클라이언트는 option(단일 번호), 새 클라이언트는 options(배열)로 보냄
+    const error = this._applyVote(n.poll, ws.userId, msg.options !== undefined ? msg.options : msg.option);
+    if (error) return this._send(ws, { type: 'error', error });
     this._saveSoon();
-    this._broadcast({ type: 'notice_updated', notice: n });
+    this._broadcastNotice('notice_updated', n);
   }
 
   _doCancelScheduledNotice(ws, msg) {
@@ -937,12 +1062,55 @@ class MessengerServer {
     this.log(`회원가입 요청: ${s.name}(${id}) — ${s.dept} ${s.position}`);
     this._statusChanged();
     reply(true);
-    // 접속 중인 관리자 권한 사용자들에게 알림
+    // 접속 중인 관리자 권한 사용자들에게 알림 + 대기 목록 갱신 (메신저에서 바로 승인 가능)
     for (const u of this.db.users) {
       if (u.admin && this.sockets.has(u.id)) {
         this._sendTo(u.id, { type: 'signup_alert', name: s.name, id: s.id, dept: s.dept, position: s.position });
       }
     }
+    this._notifyAdminsSignups();
+  }
+
+  // 접속 중인 관리자들에게 가입 대기 목록을 보냄 (서버 화면에서 처리해도 즉시 반영)
+  _notifyAdminsSignups() {
+    const list = this.listSignups();
+    for (const u of this.db.users) {
+      if (u.admin && this.sockets.has(u.id)) this._sendTo(u.id, { type: 'signups', list });
+    }
+  }
+
+  _doListSignups(ws) {
+    if (!this._requireAdmin(ws)) return;
+    this._send(ws, { type: 'signups', list: this.listSignups() });
+  }
+
+  _doApproveSignup(ws, msg) {
+    const admin = this._requireAdmin(ws);
+    if (!admin) return this._send(ws, { type: 'error', error: '관리자 권한이 필요합니다.' });
+    const req = this.db.signups.find(s => s.reqId === msg.reqId);
+    try {
+      const id = this.approveSignup(String(msg.reqId || ''));
+      this.log(`회원가입 승인(메신저): ${id} — 처리자 ${admin.name}`);
+      this._send(ws, { type: 'signup_handled', ok: true, action: 'approve', name: req ? req.name : id, id });
+    } catch (e) {
+      this._send(ws, { type: 'signup_handled', ok: false, error: e.message });
+    }
+    this._notifyAdminsSignups();
+    this._statusChanged();
+  }
+
+  _doRejectSignup(ws, msg) {
+    const admin = this._requireAdmin(ws);
+    if (!admin) return this._send(ws, { type: 'error', error: '관리자 권한이 필요합니다.' });
+    const req = this.db.signups.find(s => s.reqId === msg.reqId);
+    try {
+      this.rejectSignup(String(msg.reqId || ''));
+      this.log(`회원가입 거절(메신저): ${req ? req.id : msg.reqId} — 처리자 ${admin.name}`);
+      this._send(ws, { type: 'signup_handled', ok: true, action: 'reject', name: req ? req.name : '' });
+    } catch (e) {
+      this._send(ws, { type: 'signup_handled', ok: false, error: e.message });
+    }
+    this._notifyAdminsSignups();
   }
 
   listSignups() {
@@ -971,6 +1139,7 @@ class MessengerServer {
     this._saveSoon();
     this.log(`회원가입 승인: ${s.name}(${s.id})`);
     this._broadcastUsers();
+    this._notifyAdminsSignups();
     return s.id;
   }
 
@@ -980,6 +1149,7 @@ class MessengerServer {
     const s = this.db.signups.splice(idx, 1)[0];
     this._saveSoon();
     this.log(`회원가입 거절: ${s.name}(${s.id})`);
+    this._notifyAdminsSignups();
     this._statusChanged();
   }
 

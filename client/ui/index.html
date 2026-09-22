@@ -70,6 +70,7 @@
         <option value="class">🔴 수업중</option>
         <option value="meeting">🟠 회의중</option>
       </select>
+      <button id="signupMgrBtn" class="ghost" title="회원가입 요청 승인" style="display:none"><span class="ic">🔔</span><span class="lb">가입요청</span> <span id="signupBadge" class="cnt" style="display:none">0</span></button>
       <button id="dlDirBtn" class="ghost" title="받은 파일 폴더 열기"><span class="ic">📂</span><span class="lb">받은 폴더</span></button>
       <button id="settingsBtn" class="ghost" title="설정"><span class="ic">⚙</span><span class="lb">설정</span></button>
       <button id="profileBtn" class="ghost" title="내 정보"><span class="ic">👤</span><span class="lb">내 정보</span></button>
@@ -141,6 +142,7 @@
       <div id="tab-chat" class="tab-body chat-body" style="display:none">
         <div id="chatHead" class="chat-head">왼쪽 목록에서 대화 상대를 두 번 클릭하세요</div>
         <div id="chatLog" class="chat-log"></div>
+        <div id="chatPending" class="pending-atts" style="display:none"></div>
         <div id="chatInputRow" class="chat-input" style="display:none">
           <button id="chatAttachBtn" title="파일 첨부">📎</button>
           <textarea id="chatText" rows="2" placeholder="메시지 입력 (Enter: 전송, Shift+Enter: 줄바꿈)"></textarea>
@@ -160,10 +162,12 @@
             <button id="roomBackBtn" class="ghost">◀ 목록</button>
             <span id="roomChatTitle"></span>
             <span class="spacer"></span>
+            <button id="roomPollBtn" class="ghost" title="이 채팅방 사람들만 대상으로 설문">📊 설문</button>
             <button id="roomInviteBtn" class="ghost">+ 초대</button>
             <button id="roomLeaveBtn" class="ghost danger-text">나가기</button>
           </div>
           <div id="roomLog" class="chat-log"></div>
+          <div id="roomPending" class="pending-atts" style="display:none"></div>
           <div class="chat-input">
             <button id="roomAttachBtn" title="파일 첨부">📎</button>
             <textarea id="roomText" rows="2" placeholder="메시지 입력 (Enter: 전송, Shift+Enter: 줄바꿈)"></textarea>
@@ -255,6 +259,7 @@
     <div id="detailMeta" class="meta"></div>
     <div id="detailBody" class="detail-body"></div>
     <div id="detailFiles" class="files"></div>
+    <div id="detailPoll"></div>
     </div>
     <div class="modal-btns">
       <button id="detailChat" style="display:none">💬 대화</button>
@@ -285,6 +290,11 @@
       <textarea id="pollOptions" rows="4" placeholder="찬성&#10;반대"></textarea>
       <label>설문 마감 시각</label>
       <input type="datetime-local" id="pollDeadline" style="width:auto">
+      <div class="poll-setting-row" id="pollSettingRow">
+        <label class="chk" style="margin:0"><input type="checkbox" id="pollMulti"> 여러 항목 선택 허용</label>
+        <label class="chk" style="margin:0"><input type="checkbox" id="pollAnon"> 투표자 미공개(익명)</label>
+      </div>
+      <p class="modal-hint" style="margin-top:6px">💡 미공개로 하지 않으면 각 항목에 투표한 사람의 이름이 표시됩니다.</p>
     </div>
     <div id="noticeFileList" class="att-list"></div>
     <div class="row" style="margin-top:8px">
@@ -301,6 +311,42 @@
     <div class="modal-btns">
       <button id="noticeCancel">취소</button>
       <button id="noticePost" class="primary">등록</button>
+    </div>
+  </div>
+</div>
+
+<!-- 채팅방 설문 만들기 모달 (채팅방 참여자만 대상) -->
+<div id="roomPollModal" class="modal-bg" style="display:none">
+  <div class="modal">
+    <h2>📊 채팅방 설문</h2>
+    <div id="rpTarget" class="modal-hint" style="margin-top:0"></div>
+    <label>질문</label>
+    <input id="rpQuestion" placeholder="예: 회식 날짜를 정해 주세요">
+    <label>설문 항목 (한 줄에 하나, 2개 이상)</label>
+    <textarea id="rpOptions" rows="4" placeholder="금요일&#10;토요일"></textarea>
+    <label>마감 시각</label>
+    <input type="datetime-local" id="rpDeadline" style="width:auto">
+    <div class="poll-setting-row">
+      <label class="chk" style="margin:0"><input type="checkbox" id="rpMulti"> 여러 항목 선택 허용</label>
+      <label class="chk" style="margin:0"><input type="checkbox" id="rpAnon"> 투표자 미공개(익명)</label>
+    </div>
+    <div id="rpError" class="error"></div>
+    <div class="modal-btns">
+      <button id="rpCancel">취소</button>
+      <button id="rpOk" class="primary">설문 올리기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 회원가입 요청 승인 모달 (관리자) -->
+<div id="signupMgrModal" class="modal-bg" style="display:none">
+  <div class="modal wide scroll-layout">
+    <h2>🔔 회원가입 요청 승인</h2>
+    <div class="modal-scroll">
+      <div id="signupMgrList"></div>
+    </div>
+    <div class="modal-btns">
+      <button id="signupMgrClose" class="primary">닫기</button>
     </div>
   </div>
 </div>
