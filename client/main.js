@@ -13,6 +13,7 @@ let pendingUpdateUrl = null;     // 자동 업데이트 다운로드 중인 URL
 let pendingUpdateVersion = '';   // 내려받는 중인 버전
 let updateReady = null;          // { path, version } 설치 준비 완료된 업데이트
 let installingUpdate = false;    // 설치 프로그램을 이미 띄웠는지 (중복 실행 방지)
+const pendingSaves = new Map();  // 첨부 주소 → 저장 완료를 기다리는 요청 { resolve, reject }
 
 function verNewer(a, b) { // a > b ?
   const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
@@ -178,6 +179,8 @@ app.whenReady().then(() => {
       return;
     }
     // 일반 첨부파일: 다운로드 폴더에 자동 저장 (같은 이름이 있으면 숫자 붙임) + 진행률 표시
+    const waiter = pendingSaves.get(item.getURL()); // 열기/폴더 열기를 기다리는 요청
+    if (waiter) pendingSaves.delete(item.getURL());
     const dir = downloadDir();
     const parsed = path.parse(item.getFilename() || 'file');
     let candidate = parsed.base, n = 1;
@@ -187,17 +190,23 @@ app.whenReady().then(() => {
     const savePath = path.join(dir, candidate);
     item.setSavePath(savePath);
     const dlId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const srcUrl = item.getURL();
     const sendProgress = (state) => {
       if (win && !win.isDestroyed()) {
         win.webContents.send('download-progress', {
-          id: dlId, name: candidate, path: savePath, state,
+          id: dlId, name: candidate, path: savePath, state, url: srcUrl,
           received: item.getReceivedBytes(), total: item.getTotalBytes()
         });
       }
     };
     sendProgress('progressing');
     item.on('updated', (ev, state) => sendProgress(state));
-    item.once('done', (ev, state) => sendProgress(state));
+    item.once('done', (ev, state) => {
+      sendProgress(state);
+      if (!waiter) return;
+      if (state === 'completed') waiter.resolve(savePath);
+      else waiter.reject(new Error('다운로드가 완료되지 않았습니다.'));
+    });
   });
   createWindow();
   createTray();
@@ -285,6 +294,29 @@ ipcMain.handle('context-menu', (e, opt = {}) => {
 ipcMain.on('open-file', (e, p) => {
   if (typeof p === 'string' && fs.existsSync(p)) shell.openPath(p);
 });
+
+// 이미 받아 둔 파일이 아직 그 자리에 있는지 확인 (지웠으면 다시 받아야 함)
+ipcMain.handle('file-exists', (e, p) => {
+  try { return typeof p === 'string' && fs.existsSync(p); } catch (err) { return false; }
+});
+
+// 첨부파일을 내려받고 저장된 경로를 돌려줌 (쪽지 창을 열어 둔 채로 바로 열기/폴더 열기)
+ipcMain.handle('save-attachment', (e, url) => new Promise((resolve, reject) => {
+  url = String(url || '');
+  if (!/^https?:\/\/[^/]+\/files\//.test(url)) return reject(new Error('첨부파일 주소가 아닙니다.'));
+  if (!win || win.isDestroyed()) return reject(new Error('창을 찾을 수 없습니다.'));
+  const prev = pendingSaves.get(url);
+  if (prev) return reject(new Error('이미 내려받고 있습니다.'));
+  const timer = setTimeout(() => {
+    pendingSaves.delete(url);
+    reject(new Error('다운로드 시간이 초과되었습니다.'));
+  }, 10 * 60 * 1000);
+  pendingSaves.set(url, {
+    resolve: (p) => { clearTimeout(timer); resolve(p); },
+    reject: (err) => { clearTimeout(timer); reject(err); }
+  });
+  win.webContents.downloadURL(url);
+}));
 
 // ---------- 첨부파일 저장 폴더 설정 ----------
 ipcMain.handle('get-download-dir', () => settings.downloadDir || defaultDownloadDir());

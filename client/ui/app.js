@@ -1144,8 +1144,13 @@ function attachmentLinks(m) {
       media = `<audio class="att-audio" src="${view}" controls preload="metadata"></audio>`;
     }
     const icon = IMG_EXT.test(a.name) ? '🖼' : VIDEO_EXT.test(a.name) ? '🎬' : AUDIO_EXT.test(a.name) ? '🎵' : '📎';
+    // 쪽지 창을 열어 둔 채로 바로 실행/폴더 열기 (아직 안 받았으면 받고 나서 실행)
+    const acts = `<span class="att-acts">
+      <button class="att-act" data-mode="open" data-url="${url}" title="첨부파일 바로 열기">📂 열기</button>
+      <button class="att-act" data-mode="dir" data-url="${url}" title="저장된 폴더 열기">📁 폴더</button>
+    </span>`;
     return `<div class="att-line">
-      <a href="${url}">${icon} ${i + 1}. ${esc(a.name)} (${fmtSize(a.size)})</a>${media}</div>`;
+      <a href="${url}">${icon} ${i + 1}. ${esc(a.name)} (${fmtSize(a.size)})</a>${acts}${media}</div>`;
   }).join('');
   // 첨부가 2개 이상이면 한 번에 모두 내려받기
   const all = atts.length > 1
@@ -1153,6 +1158,58 @@ function attachmentLinks(m) {
          ⬇ 첨부 ${atts.length}개 모두 저장</button></div>`
     : '';
   return all + lines;
+}
+
+// 첨부파일 [열기] / [폴더] 버튼 — 쪽지 창이 열려 있어도 바로 동작한다.
+// 이미 받은 파일이면 그대로 열고, 아직 안 받았으면 내려받은 뒤 실행한다.
+S.savedAtt = {}; // 첨부 주소 → 저장된 파일 경로
+async function runAttachment(url, mode, btn) {
+  const saved = S.savedAtt[url];
+  // 이미 받아 둔 파일이 그대로 있으면 다시 받지 않고 바로 연다
+  if (saved && await window.native.fileExists(saved)) {
+    if (mode === 'open') window.native.openFile(saved);
+    else window.native.showInFolder(saved);
+    return;
+  }
+  delete S.savedAtt[url];
+  const line = btn.closest('.att-line');
+  const btns = line ? [...line.querySelectorAll('.att-act')] : [btn];
+  const labels = btns.map(b => b.textContent);
+  btns.forEach(b => { b.disabled = true; });
+  btn.textContent = '받는 중…';
+  try {
+    const p = await window.native.saveAttachment(url);
+    S.savedAtt[url] = p;
+    if (mode === 'open') window.native.openFile(p);
+    else window.native.showInFolder(p);
+  } catch (err) {
+    const msg = String((err && err.message) || err)
+      .replace(/^Error invoking remote method '[^']*':\s*/, '')
+      .replace(/^Error:\s*/, '');
+    alert('첨부파일을 열지 못했습니다.\n' + msg);
+  } finally {
+    btns.forEach((b, i) => { b.disabled = false; b.textContent = labels[i]; });
+  }
+}
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.att-act');
+  if (!btn || btn.disabled) return;
+  e.preventDefault();
+  e.stopPropagation(); // 목록 항목 클릭으로 번지지 않도록
+  runAttachment(btn.dataset.url, btn.dataset.mode, btn);
+});
+
+// 모달(쪽지 창 등)이 열려 있는 동안에는 다운로드 패널을 왼쪽 아래로 옮겨
+// 모달 버튼을 가리지 않으면서 진행 상황과 [파일 열기] 버튼이 보이게 한다
+function syncModalOpen() {
+  const open = [...document.querySelectorAll('.modal-bg')].some(el => el.style.display === 'flex');
+  document.body.classList.toggle('modal-open', open);
+}
+{
+  const obs = new MutationObserver(syncModalOpen);
+  document.querySelectorAll('.modal-bg').forEach(el =>
+    obs.observe(el, { attributes: true, attributeFilter: ['style'] }));
+  syncModalOpen();
 }
 
 // "모두 저장" 버튼 (본문 어디에 있든 동작)
@@ -3093,6 +3150,8 @@ window.native.onDownloadProgress((d) => {
   const remove = (ms) => setTimeout(() => { el.remove(); dlItems.delete(d.id); }, ms);
   if (d.state === 'completed') {
     bar.style.width = '100%';
+    // 링크를 눌러 받은 첨부도 경로를 기억해 두면 [열기]를 다시 받지 않고 바로 연다
+    if (d.url && d.path) S.savedAtt[d.url] = d.path;
     if (d.isUpdate) {
       st.textContent = `✅ 준비 완료 (${fmtSize(d.received)}) — 상단의 [재시작] 버튼을 누르면 적용됩니다`;
       remove(12000);
