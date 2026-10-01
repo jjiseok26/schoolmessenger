@@ -92,7 +92,10 @@
         <button class="side-tab active" data-side="org">조직도</button>
         <button class="side-tab" data-side="groups">사용자 그룹</button>
       </div>
-      <input id="searchInput" placeholder="🔍 이름/부서 검색">
+      <div class="search-wrap">
+        <input id="searchInput" placeholder="🔍 이름/부서 검색">
+        <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
+      </div>
       <div id="treeSelBar" class="tree-sel-bar">
         <label class="chk" style="margin:0"><input type="checkbox" id="treeSelAll"> 전체 선택</label>
         <span id="treeSelCount" class="sel-count"></span>
@@ -126,14 +129,20 @@
 
       <div id="tab-inbox" class="tab-body" style="display:none">
         <div class="list-toolbar">
-          <input id="inboxSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/보낸 사람 검색">
+          <div class="search-wrap">
+            <input id="inboxSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/보낸 사람 검색">
+            <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
+          </div>
           <button id="inboxComposeBtn" class="primary">✉ 쪽지 보내기</button>
         </div>
         <div id="inboxList" class="msg-list"></div>
       </div>
       <div id="tab-sent" class="tab-body" style="display:none">
         <div class="list-toolbar">
-          <input id="sentSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/받는 사람 검색">
+          <div class="search-wrap">
+            <input id="sentSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/받는 사람 검색">
+            <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
+          </div>
           <button id="sentComposeBtn" class="primary">✉ 쪽지 보내기</button>
         </div>
         <div id="sentList" class="msg-list"></div>
@@ -178,7 +187,10 @@
 
       <div id="tab-notice" class="tab-body">
         <div class="list-toolbar">
-          <input id="noticeSearch" class="list-search-inline" placeholder="🔍 공지 제목/내용/작성자 검색">
+          <div class="search-wrap">
+            <input id="noticeSearch" class="list-search-inline" placeholder="🔍 공지 제목/내용/작성자 검색">
+            <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
+          </div>
           <button id="noticeWriteBtn2" class="primary">📝 공지 쓰기</button>
           <button id="pollWriteBtn2">📊 설문 만들기</button>
         </div>

@@ -1015,7 +1015,11 @@ function msgItem(m, mode) {
   const clip = m.attachments.length ? '<span class="clip">📎</span> ' : '';
   const readInfo = mode === 'sent'
     ? `<span class="readmark">읽음 ${m.readBy.length}/${m.to.length}</span>` : '';
-  el.innerHTML = `<span class="type-chip tc-msg">쪽지</span>${avatarHtml(avId, nameOf(avId), 34)}<span class="who">${esc(who)}</span>
+  // 안 읽은 쪽지는 [NEW] 라벨 + 색으로 한눈에 띄게 표시
+  const chip = unread
+    ? '<span class="type-chip tc-new">NEW</span>'
+    : '<span class="type-chip tc-msg">쪽지</span>';
+  el.innerHTML = `${chip}${avatarHtml(avId, nameOf(avId), 34)}<span class="who">${esc(who)}</span>
     <span class="preview">${clip}${esc(m.text.slice(0, 100)) || '(첨부파일)'}</span>
     ${readInfo}<span class="when">${fmtTime(m.time)}</span>`;
   el.onclick = () => openDetail(m, mode);
@@ -1043,22 +1047,41 @@ function msgItem(m, mode) {
   return el;
 }
 
-function msgMatches(m, q) {
+// 받은쪽지함은 보낸 사람만, 보낸쪽지함은 받는 사람만 이름으로 검색한다.
+// (받은쪽지함에서 받는 사람까지 검색하면 같이 받은 사람 이름으로 엉뚱한 쪽지가 걸린다)
+function msgMatches(m, q, mode) {
   if (!q) return true;
-  return m.text.toLowerCase().includes(q) ||
-    nameOf(m.from).toLowerCase().includes(q) ||
-    m.to.some(id => nameOf(id).toLowerCase().includes(q)) ||
-    m.attachments.some(a => a.name.toLowerCase().includes(q));
+  if (m.text.toLowerCase().includes(q)) return true;
+  if (m.attachments.some(a => a.name.toLowerCase().includes(q))) return true;
+  if (mode === 'sent') return m.to.some(id => nameOf(id).toLowerCase().includes(q));
+  return nameOf(m.from).toLowerCase().includes(q);
+}
+
+// 검색 중일 때 "가려진 쪽지가 있다"는 것을 알려 주는 안내줄 (쪽지 누락 방지)
+function searchNote(input, shown, total) {
+  const note = document.createElement('div');
+  note.className = 'search-note';
+  note.innerHTML = `🔍 <b>'${esc(input.value.trim())}'</b> 검색 중 — 전체 ${total}건 중 <b>${shown}건</b> 표시
+    <button class="sn-clear">전체 보기</button>`;
+  note.querySelector('.sn-clear').onclick = () => {
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  return note;
 }
 
 function renderInbox() {
   const list = $('#inboxList');
   const q = $('#inboxSearch').value.trim().toLowerCase();
   list.innerHTML = '';
-  const items = S.messages
-    .filter(m => m.to.includes(S.me.id) && m.from !== S.me.id && msgMatches(m, q)).reverse();
+  const all = S.messages.filter(m => m.to.includes(S.me.id) && m.from !== S.me.id);
+  const items = all.filter(m => msgMatches(m, q, 'inbox')).reverse();
+  if (q) list.appendChild(searchNote($('#inboxSearch'), items.length, all.length));
   if (!items.length) {
-    list.innerHTML = `<div class="empty">${q ? '검색 결과가 없습니다' : '받은 쪽지가 없습니다'}</div>`;
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = q ? '검색 결과가 없습니다' : '받은 쪽지가 없습니다';
+    list.appendChild(e);
     return;
   }
   for (const m of items) list.appendChild(msgItem(m, 'inbox'));
@@ -1068,9 +1091,12 @@ function renderSent() {
   const list = $('#sentList');
   const q = $('#sentSearch').value.trim().toLowerCase();
   list.innerHTML = '';
+  const allSent = S.messages.filter(m => m.from === S.me.id);
+  if (q) list.appendChild(searchNote($('#sentSearch'),
+    allSent.filter(m => msgMatches(m, q, 'sent')).length, allSent.length));
   // 예약 대기 중인 쪽지 (맨 위)
   for (const s of [...S.scheduled].sort((a, b) => a.sendAt - b.sendAt)) {
-    if (q && !msgMatches({ ...s, readBy: [] }, q)) continue;
+    if (q && !msgMatches({ ...s, readBy: [] }, q, 'sent')) continue;
     const el = document.createElement('div');
     el.className = 'msg-item sched-item';
     const who = s.to.map(nameOf).slice(0, 2).join(', ') + (s.to.length > 2 ? ` 외 ${s.to.length - 2}명` : '');
@@ -1084,9 +1110,12 @@ function renderSent() {
     };
     list.appendChild(el);
   }
-  const items = S.messages.filter(m => m.from === S.me.id && msgMatches(m, q)).reverse();
-  if (!items.length && !list.children.length) {
-    list.innerHTML = `<div class="empty">${q ? '검색 결과가 없습니다' : '보낸 쪽지가 없습니다'}</div>`;
+  const items = allSent.filter(m => msgMatches(m, q, 'sent')).reverse();
+  if (!items.length && !list.querySelector('.msg-item')) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = q ? '검색 결과가 없습니다' : '보낸 쪽지가 없습니다';
+    list.appendChild(e);
     return;
   }
   for (const m of items) list.appendChild(msgItem(m, 'sent'));
@@ -1305,10 +1334,20 @@ function renderPending(kind) {
   list.forEach((f, i) => {
     const chip = document.createElement('span');
     chip.className = 'pending-chip';
-    chip.innerHTML = `${IMG_EXT.test(f.name) ? '🖼' : VIDEO_EXT.test(f.name) ? '🎬' : '📎'}
+    // 그림은 어떤 그림을 붙여넣었는지 알 수 있게 작은 썸네일을 함께 표시
+    let head = IMG_EXT.test(f.name) ? '🖼' : VIDEO_EXT.test(f.name) ? '🎬' : '📎';
+    if (IMG_EXT.test(f.name)) {
+      if (!f._previewUrl) f._previewUrl = URL.createObjectURL(f);
+      head = `<img class="pending-thumb" src="${f._previewUrl}" alt="">`;
+    }
+    chip.innerHTML = `${head}
       <span class="att-name">${esc(f.name)}</span>
       <span class="att-size">${fmtSize(f.size)}</span><span class="att-del" title="첨부 제거">✕</span>`;
-    chip.querySelector('.att-del').onclick = () => { list.splice(i, 1); renderPending(kind); };
+    chip.querySelector('.att-del').onclick = () => {
+      if (f._previewUrl) { try { URL.revokeObjectURL(f._previewUrl); } catch (e) {} }
+      list.splice(i, 1);
+      renderPending(kind);
+    };
     box.appendChild(chip);
   });
 }
@@ -1320,6 +1359,26 @@ function addPendingFiles(kind, files) {
   }
   renderPending(kind);
 }
+
+// 대화·채팅방 입력창에 그림을 복사해 붙여넣으면 첨부로 등록 (Enter/전송으로 보냄)
+function pasteImageToChat(kind) {
+  return (e) => {
+    const items = [...(e.clipboardData?.items || [])];
+    const files = [];
+    items.forEach((it, i) => {
+      if (!it.type || !it.type.startsWith('image/')) return;
+      const blob = it.getAsFile();
+      if (!blob) return;
+      const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+      files.push(new File([blob], `붙여넣기-${Date.now()}-${i + 1}.${ext}`, { type: blob.type }));
+    });
+    if (!files.length) return; // 일반 텍스트 붙여넣기는 그대로
+    e.preventDefault();
+    addPendingFiles(kind, files);
+  };
+}
+$('#chatText').addEventListener('paste', pasteImageToChat('chat'));
+$('#roomText').addEventListener('paste', pasteImageToChat('room'));
 
 function openRoomModal(mode) {
   S.roomModalMode = mode;
@@ -1775,8 +1834,12 @@ function showTab(tab) {
     localStorage.setItem(noticeSeenKey(), String(Date.now()));
     updateBadges();
   }
+  // 목록 탭은 항상 최신 내용으로 다시 그리고 맨 위(최신 쪽지)부터 보이게 한다
+  if (tab === 'inbox') renderInbox();
+  if (tab === 'sent') renderSent();
   if (tab === 'chat') renderChat();
   if (tab === 'rooms') renderRooms();
+  if (['inbox', 'sent', 'notice'].includes(tab)) $('#tab-' + tab).scrollTop = 0;
 }
 
 $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
@@ -2065,6 +2128,8 @@ $('#rtColor').addEventListener('input', (e) => {
 // 이미지 파일을 첨부 + 본문(커서 위치)에 삽입
 function insertImageToEditor(f) {
   if (!f._previewUrl) f._previewUrl = URL.createObjectURL(f);
+  f._inBody = true; // 본문에 보이므로 첨부 목록에서는 미리보기를 띄우지 않음
+  renderComposeFiles();
   $('#composeText').focus();
   document.execCommand('insertImage', false, f._previewUrl);
 }
@@ -2096,6 +2161,7 @@ async function materializeEditorImages() {
       const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
       const file = new File([blob], `붙여넣기-${Date.now()}.${ext}`, { type: blob.type });
       file._previewUrl = src;
+      file._inBody = true; // 본문에 있는 그림이므로 첨부 미리보기는 생략
       S.composeFileList.push(file);
     } catch (e) {
       img.remove(); // 되살릴 수 없는 이미지는 제거
@@ -2113,7 +2179,8 @@ function msgStyleCss(m) {
   return s;
 }
 
-// 첨부파일 누적 목록 (파일 선택을 여러 번 해도 기존 파일 유지, 이미지는 미리보기)
+// 첨부파일 누적 목록 (파일 선택을 여러 번 해도 기존 파일 유지)
+// 본문에 삽입된 그림(복사·붙여넣기/끌어다 놓기)은 본문에 이미 보이므로 미리보기를 또 띄우지 않는다.
 function renderComposeFiles() {
   const box = $('#composeFileList');
   box.innerHTML = '';
@@ -2121,7 +2188,9 @@ function renderComposeFiles() {
     const row = document.createElement('div');
     row.className = 'att-row';
     let thumb = '';
-    if (IMG_EXT.test(f.name)) {
+    if (f._inBody) {
+      thumb = '<span class="att-inbody">본문에 삽입됨</span>';
+    } else if (IMG_EXT.test(f.name)) {
       if (!f._previewUrl) f._previewUrl = URL.createObjectURL(f);
       thumb = `<img class="att-thumb" src="${f._previewUrl}" alt="">`;
     } else if (VIDEO_EXT.test(f.name)) {
@@ -2193,7 +2262,8 @@ function openCompose(preset, prefillText, carryAttachments, prefillHtml) {
     ? '전달할 첨부: ' + S.composeCarry.map(a => `📎 ${esc(a.name)}`).join(', ')
     : '';
   renderRecipients();
-  renderPicker();
+  // 받는 사람이 이미 있으면 본문부터 쓰도록, 없으면 받는 사람 검색창에 커서
+  renderPicker(!S.recipients.size);
   $('#composeModal').style.display = 'flex';
   $('#draftInfo').textContent = '';
 
@@ -2210,7 +2280,7 @@ function openCompose(preset, prefillText, carryAttachments, prefillHtml) {
         $('#schedTime').value = d.schedTime || '';
       }
       renderRecipients();
-      renderPicker();
+      renderPicker(!S.recipients.size);
       $('#draftInfo').textContent = '💾 임시저장 내용을 불러왔습니다';
     } else clearDraft();
   }
@@ -2218,7 +2288,9 @@ function openCompose(preset, prefillText, carryAttachments, prefillHtml) {
   // 자동 임시저장 (10초 간격 + 입력 시)
   clearInterval(S.draftTimer);
   S.draftTimer = setInterval(saveDraft, 10000);
-  $('#composeText').focus();
+  // 받는 사람이 정해져 있으면 본문에 커서 (검색창 자동 포커스보다 뒤에 실행)
+  if (S.recipients.size) setTimeout(focusComposeBody, 60);
+  else $('#composeText').focus();
 }
 
 // ---- 사용자 선택기 (쪽지/채팅방 공용) ----
@@ -2238,7 +2310,7 @@ function buildChips(chipBox, pickerBox, set) {
   }
 }
 
-function buildPicker(pickerBox, chipBox, set, exclude) {
+function buildPicker(pickerBox, chipBox, set, exclude, autoFocus = true) {
   pickerBox.innerHTML = '';
   const excludeSet = new Set([S.me.id, ...(exclude || [])]);
   const refresh = () => { buildChips(chipBox, pickerBox, set); syncPicker(pickerBox, set); };
@@ -2295,7 +2367,8 @@ function buildPicker(pickerBox, chipBox, set, exclude) {
   pickerBox.appendChild(results);
   renderResults();
   refresh();
-  setTimeout(() => input.focus(), 50);
+  // 받는 사람이 이미 정해진 경우(우클릭 쪽지·답장·전달)에는 검색창으로 커서를 가져오지 않는다
+  if (autoFocus) setTimeout(() => input.focus(), 50);
 }
 
 function renderRecipients() {
@@ -2303,8 +2376,22 @@ function renderRecipients() {
   syncPicker($('#recipPicker'), S.recipients);
 }
 
-function renderPicker() {
-  buildPicker($('#recipPicker'), $('#recipChips'), S.recipients);
+function renderPicker(autoFocus) {
+  buildPicker($('#recipPicker'), $('#recipChips'), S.recipients, null, autoFocus !== false);
+}
+
+// 쪽지 본문에 커서 놓기 (답장·전달이면 인용문 위에서 쓰도록 맨 앞에)
+function focusComposeBody() {
+  const el = $('#composeText');
+  el.focus();
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (e) {}
 }
 
 async function uploadFiles(fileList) {
@@ -2856,6 +2943,40 @@ $('#logoutBtn').addEventListener('click', () => {
 $('#searchInput').addEventListener('input', () => renderTree());
 $('#inboxSearch').addEventListener('input', () => renderInbox());
 $('#sentSearch').addEventListener('input', () => renderSent());
+
+// 검색창의 ✕ 버튼: 입력한 검색어를 지우고 전체 목록으로 되돌림
+function setupSearchClear(input) {
+  const wrap = input.closest('.search-wrap');
+  if (!wrap) return;
+  const btn = wrap.querySelector('.search-clear');
+  const sync = () => { btn.style.display = input.value ? '' : 'none'; };
+  input.addEventListener('input', sync);
+  btn.addEventListener('click', () => {
+    input.value = '';
+    sync();
+    input.dispatchEvent(new Event('input', { bubbles: true })); // 목록 다시 그리기
+    input.focus();
+  });
+  sync();
+}
+['#searchInput', '#inboxSearch', '#sentSearch', '#noticeSearch'].forEach(sel => setupSearchClear($(sel)));
+
+// ---------- 그림 우클릭: 저장 / 복사 ----------
+// 조직도 사용자 우클릭 메뉴는 그대로 두고, 그림·입력창에서만 윈도우 기본형 메뉴를 띄운다.
+document.addEventListener('contextmenu', (e) => {
+  if (e.target.closest('.user-row')) return; // 조직도 메뉴가 담당
+  const img = e.target.closest('img');
+  const imageUrl = img && /^https?:/i.test(img.src) ? img.src : '';
+  const editable = !!e.target.closest('input, textarea, [contenteditable=true]');
+  const selection = String(window.getSelection() || '').trim();
+  if (!imageUrl && !editable && !selection) return;
+  e.preventDefault();
+  window.native?.contextMenu({
+    imageUrl, editable, hasSelection: !!selection,
+    name: img ? (img.getAttribute('alt') || '') : '',
+    x: Math.round(e.clientX), y: Math.round(e.clientY)
+  });
+});
 
 // ---------- 설정 ----------
 $('#settingsBtn').addEventListener('click', async () => {

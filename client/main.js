@@ -253,6 +253,35 @@ ipcMain.on('refocus', () => {
 ipcMain.on('show-in-folder', (e, p) => {
   if (typeof p === 'string' && fs.existsSync(p)) shell.showItemInFolder(p);
 });
+
+// 그림/입력창 우클릭 메뉴 (대화·쪽지 속 그림을 저장하거나 복사)
+// 반환값: 메뉴에 담은 항목 수 (0이면 띄우지 않음)
+ipcMain.handle('context-menu', (e, opt = {}) => {
+  if (!win || win.isDestroyed()) return 0;
+  const imageItems = [];
+  const url = String(opt.imageUrl || '');
+  if (/^https?:\/\//i.test(url)) {
+    // 미리보기용 inline 주소에서 받으면 파일 이름이 빠질 수 있어 원래 주소로 내려받는다
+    const dlUrl = url.replace(/([?&])inline=1(&|$)/, '$1').replace(/[?&]$/, '');
+    imageItems.push({ label: '그림 저장', click: () => win.webContents.downloadURL(dlUrl) });
+    imageItems.push({
+      label: '그림 복사',
+      click: () => win.webContents.copyImageAt(Number(opt.x) || 0, Number(opt.y) || 0)
+    });
+  }
+  const editItems = [];
+  if (opt.hasSelection) editItems.push({ label: '복사', role: 'copy' });
+  if (opt.editable) {
+    if (opt.hasSelection) editItems.push({ label: '잘라내기', role: 'cut' });
+    editItems.push({ label: '붙여넣기', role: 'paste' });
+    editItems.push({ label: '모두 선택', role: 'selectAll' });
+  }
+  const items = imageItems.length && editItems.length
+    ? [...imageItems, { type: 'separator' }, ...editItems]
+    : [...imageItems, ...editItems];
+  if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
+  return items.length;
+});
 ipcMain.on('open-file', (e, p) => {
   if (typeof p === 'string' && fs.existsSync(p)) shell.openPath(p);
 });

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('native', {
   onUpdateFailed: (cb) => ipcRenderer.on('update-failed', (e, d) => cb(d)),
   refocus: () => ipcRenderer.send('refocus'),
   showInFolder: (p) => ipcRenderer.send('show-in-folder', p),
+  contextMenu: (opt) => ipcRenderer.invoke('context-menu', opt),
   openFile: (p) => ipcRenderer.send('open-file', p),
   setBadge: (count, dataUrl, trayUrl) => ipcRenderer.send('set-badge', count, dataUrl, trayUrl),
   getDownloadDir: () => ipcRenderer.invoke('get-download-dir'),
