@@ -577,6 +577,8 @@ body.dark .tree-sel-bar .sel-count { color: #7fbcf7; }
 }
 .tc-msg { background: #e3f0fd; color: #1565c0; }
 .tc-notice { background: #fff3e0; color: #e65100; }
+.tc-self { background: #e8f5e9; color: #2e7d32; }
+body.dark .tc-self { background: #1e3b24; color: #81c784; }
 /* 안 읽은 쪽지 라벨 */
 .tc-new {
   background: #e53935; color: #fff;
@@ -719,6 +721,12 @@ body.dark .chat-log { background: #191d23; }
   font-size: 13px; cursor: pointer;
 }
 .chip::after { content: ' ✕'; color: #90a; font-size: 11px; }
+/* 나에게 보내기 */
+.chip-me { background: #e8f5e9; color: #2e7d32; font-weight: bold; }
+body.dark .chip-me { background: #1e3b24; color: #81c784; }
+.recip-head { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; }
+.recip-head label { font-size: 14px; color: #334; }
+#recipSelfBtn { padding: 4px 12px; font-size: 12px; white-space: nowrap; }
 .picker {
   max-height: 170px; overflow-y: auto; border: 1px solid #e2e8f2;
   border-radius: 6px; margin-top: 6px; padding: 4px;

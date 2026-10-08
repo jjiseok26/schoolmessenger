@@ -90,7 +90,7 @@ const S = {
   rooms: [], roomMsgs: {}, currentRoom: null,
   scheduled: [], schedNotices: [], groups: [],
   sideTab: 'org', groupPick: new Set(), editingGroupId: null,
-  adminEditId: null, openNoticeId: null, deptOrder: [],
+  adminEditId: null, openNoticeId: null, openMsgId: null, deptOrder: [],
   userOrder: {}, deptFlat: [], deptDisplayed: {},
   extraDepts: [], derivedDepts: new Set(),
   treeSel: new Set(), treeVisible: [],
@@ -343,7 +343,17 @@ function handleServer(m) {
       break;
     }
     case 'recall_result':
-      if (!m.ok) alert(m.error || '회수하지 못했습니다.');
+      if (!m.ok) { alert(m.error || '회수하지 못했습니다.'); break; }
+      // 회수한 본인 보관함에서도 제거
+      if (m.messageId) {
+        S.messages = S.messages.filter(x => x.id !== m.messageId);
+        if (S.openMsgId === m.messageId) {
+          S.openMsgId = null;
+          $('#detailModal').style.display = 'none';
+        }
+        renderAll();
+      }
+      if (m.readCount) alert(`쪽지를 회수했습니다.\n다만 ${m.readCount}명은 이미 읽은 뒤였습니다.`);
       break;
     case 'scheduled_added':
       S.scheduled.push(m.item);
@@ -358,8 +368,23 @@ function handleServer(m) {
       S.scheduled = S.scheduled.filter(s => s.id !== m.id);
       renderSent();
       break;
-    case 'message_recalled':
+    case 'message_recalled': {
+      // 보낸 사람이 회수함 — 읽은 뒤에도 회수될 수 있으므로 열어 둔 쪽지 창도 닫는다
+      const wasOpen = S.openMsgId === m.messageId;
+      S.messages = S.messages.filter(x => x.id !== m.messageId);
+      renderAll();
+      if (wasOpen) {
+        S.openMsgId = null;
+        $('#detailModal').style.display = 'none';
+        alert(`${m.from || '보낸 사람'} 님이 이 쪽지를 회수했습니다.`);
+      }
+      break;
+    }
     case 'message_deleted':
+      if (S.openMsgId === m.messageId) {
+        S.openMsgId = null;
+        $('#detailModal').style.display = 'none';
+      }
       S.messages = S.messages.filter(x => x.id !== m.messageId);
       renderAll();
       break;
@@ -1004,13 +1029,21 @@ function forwardMessage(m) {
   }
 }
 
+// 나에게 보낸 쪽지 (받는 사람이 나 혼자)
+function isSelfNote(m) {
+  return m.from === S.me.id && m.to.length === 1 && m.to[0] === S.me.id;
+}
+
 function msgItem(m, mode) {
   const el = document.createElement('div');
   const unread = mode === 'inbox' && !m.readBy.includes(S.me.id) && m.from !== S.me.id;
   el.className = 'msg-item' + (unread ? ' unread' : '');
-  const who = mode === 'inbox'
-    ? nameOf(m.from)
-    : m.to.map(nameOf).slice(0, 2).join(', ') + (m.to.length > 2 ? ` 외 ${m.to.length - 2}명` : '');
+  const self = isSelfNote(m);
+  const who = self
+    ? '나에게'
+    : (mode === 'inbox'
+      ? nameOf(m.from)
+      : m.to.map(nameOf).slice(0, 2).join(', ') + (m.to.length > 2 ? ` 외 ${m.to.length - 2}명` : ''));
   const avId = mode === 'inbox' ? m.from : m.to[0];
   const clip = m.attachments.length ? '<span class="clip">📎</span> ' : '';
   const readInfo = mode === 'sent'
@@ -1018,7 +1051,8 @@ function msgItem(m, mode) {
   // 안 읽은 쪽지는 [NEW] 라벨 + 색으로 한눈에 띄게 표시
   const chip = unread
     ? '<span class="type-chip tc-new">NEW</span>'
-    : '<span class="type-chip tc-msg">쪽지</span>';
+    : (self ? '<span class="type-chip tc-self">메모</span>'
+            : '<span class="type-chip tc-msg">쪽지</span>');
   el.innerHTML = `${chip}${avatarHtml(avId, nameOf(avId), 34)}<span class="who">${esc(who)}</span>
     <span class="preview">${clip}${esc(m.text.slice(0, 100)) || '(첨부파일)'}</span>
     ${readInfo}<span class="when">${fmtTime(m.time)}</span>`;
@@ -1026,7 +1060,8 @@ function msgItem(m, mode) {
   // 목록에서 내용을 열지 않고 바로 동작 (받은쪽지: 답장/전달/삭제, 보낸쪽지: 전달/삭제)
   const btns = document.createElement('span');
   btns.className = 'msg-actions';
-  const peerId = mode === 'inbox' ? m.from : m.to.find(id => id !== S.me.id);
+  // 나에게 보낸 메모는 "대화" 상대가 없다
+  const peerId = self ? null : (mode === 'inbox' ? m.from : m.to.find(id => id !== S.me.id));
   btns.innerHTML = `
     ${mode === 'inbox' ? '<button data-a="reply" title="답장">↩ 답장</button>' : ''}
     ${peerId ? `<button data-a="chat" title="${esc(nameOf(peerId))} 님과 대화">💬</button>` : ''}
@@ -1074,7 +1109,8 @@ function renderInbox() {
   const list = $('#inboxList');
   const q = $('#inboxSearch').value.trim().toLowerCase();
   list.innerHTML = '';
-  const all = S.messages.filter(m => m.to.includes(S.me.id) && m.from !== S.me.id);
+  // 내가 나에게 보낸 쪽지도 받은쪽지함에 함께 보인다
+  const all = S.messages.filter(m => m.to.includes(S.me.id));
   const items = all.filter(m => msgMatches(m, q, 'inbox')).reverse();
   if (q) list.appendChild(searchNote($('#inboxSearch'), items.length, all.length));
   if (!items.length) {
@@ -1912,6 +1948,7 @@ function openChat(peerId) {
 // ---------- 쪽지 상세 ----------
 function openDetail(m, mode) {
   S.openNoticeId = null;
+  S.openMsgId = m.id; // 회수되면 열려 있는 창을 닫기 위해 기억
   if (mode === 'inbox' && !m.readBy.includes(S.me.id)) {
     send({ type: 'read', messageId: m.id });
     m.readBy.push(S.me.id);
@@ -1960,11 +1997,14 @@ function openDetail(m, mode) {
     $('#detailModal').style.display = 'none';
     forwardMessage(m);
   };
-  // 회수 (보낸 쪽지 중 아무도 읽지 않은 것만)
-  const canRecall = mode === 'sent' && m.readBy.length === 0;
-  $('#detailRecall').style.display = canRecall ? '' : 'none';
+  // 회수 (내가 보낸 쪽지는 상대가 이미 읽었어도 회수 가능)
+  $('#detailRecall').style.display = mode === 'sent' ? '' : 'none';
   $('#detailRecall').onclick = () => {
-    if (confirm('이 쪽지를 회수할까요? 받는 사람에게서 삭제됩니다.')) {
+    const readers = m.readBy.map(nameOf).join(', ');
+    const warn = m.readBy.length
+      ? `이미 읽은 사람이 있습니다. (${readers})\n내용을 본 뒤일 수 있습니다.\n\n`
+      : '';
+    if (confirm(`${warn}이 쪽지를 회수할까요?\n받는 사람의 쪽지함에서 삭제됩니다.`)) {
       send({ type: 'recall_message', messageId: m.id });
       $('#detailModal').style.display = 'none';
     }
@@ -2046,6 +2086,7 @@ function printMessage({ title, metaHtml, bodyHtml, files }) {
 
 function openNoticeDetail(n) {
   S.openNoticeId = n.id;
+  S.openMsgId = null;
   $('#detailTitle').textContent = '📢 ' + n.title;
   let meta = `작성자: ${esc(n.authorName)}<br>시각: ${fmtFull(n.time)}`;
   if (n.edited) meta += `<br><span style="color:#e67e22">✏ 수정됨: ${fmtFull(n.edited)}${n.editedBy ? ' (' + esc(n.editedBy) + ')' : ''}</span>`;
@@ -2360,16 +2401,33 @@ function buildChips(chipBox, pickerBox, set) {
   if (!set.size) chipBox.innerHTML = '<span style="color:#9aa;font-size:12px;padding:4px">아래 목록에서 선택하세요</span>';
   for (const id of set) {
     const c = document.createElement('span');
-    c.className = 'chip';
-    c.textContent = nameOf(id);
+    c.className = 'chip' + (id === S.me.id ? ' chip-me' : '');
+    c.textContent = id === S.me.id ? '나 (' + nameOf(id) + ')' : nameOf(id);
     c.onclick = () => { set.delete(id); buildChips(chipBox, pickerBox, set); syncPicker(pickerBox, set); };
     chipBox.appendChild(c);
   }
+  if (chipBox.id === 'recipChips') syncSelfBtn();
 }
 
-function buildPicker(pickerBox, chipBox, set, exclude, autoFocus = true) {
+// '나에게 보내기' 버튼 상태 (받는 사람에 내가 들어 있는지)
+function syncSelfBtn() {
+  const btn = $('#recipSelfBtn');
+  if (!btn || !S.me) return;
+  const on = S.recipients.has(S.me.id);
+  btn.classList.toggle('primary', on);
+  btn.textContent = on ? '✔ 나에게 보내기' : '👤 나에게 보내기';
+}
+$('#recipSelfBtn').addEventListener('click', () => {
+  if (S.recipients.has(S.me.id)) S.recipients.delete(S.me.id);
+  else S.recipients.add(S.me.id);
+  renderRecipients();
+  focusComposeBody();
+});
+
+// allowSelf=true 면 나 자신도 선택 대상에 포함 (쪽지의 '나에게 보내기')
+function buildPicker(pickerBox, chipBox, set, exclude, autoFocus = true, allowSelf = false) {
   pickerBox.innerHTML = '';
-  const excludeSet = new Set([S.me.id, ...(exclude || [])]);
+  const excludeSet = new Set([...(allowSelf ? [] : [S.me.id]), ...(exclude || [])]);
   const refresh = () => { buildChips(chipBox, pickerBox, set); syncPicker(pickerBox, set); };
   // 검색 우선: 목록을 바로 보여주지 않고 검색어로 찾은 대상만 표시
   const input = document.createElement('input');
@@ -2434,7 +2492,7 @@ function renderRecipients() {
 }
 
 function renderPicker(autoFocus) {
-  buildPicker($('#recipPicker'), $('#recipChips'), S.recipients, null, autoFocus !== false);
+  buildPicker($('#recipPicker'), $('#recipChips'), S.recipients, null, autoFocus !== false, true);
 }
 
 // 쪽지 본문에 커서 놓기 (답장·전달이면 인용문 위에서 쓰도록 맨 앞에)

@@ -587,18 +587,22 @@ class MessengerServer {
     this._send(ws, { type: 'message_deleted', messageId: msg.messageId });
   }
 
+  // 쪽지 회수 — 보낸 사람 본인이면 상대가 이미 읽었어도 회수할 수 있다
   _doRecallMessage(ws, msg) {
     const idx = this.db.messages.findIndex(x => x.id === msg.messageId);
     if (idx < 0 || this.db.messages[idx].from !== ws.userId) return;
     const m = this.db.messages[idx];
-    if (m.readBy.length) {
-      return this._send(ws, { type: 'recall_result', ok: false, error: '이미 읽은 사람이 있어 회수할 수 없습니다.' });
-    }
     this.db.messages.splice(idx, 1);
     this._saveSoon();
-    this._send(ws, { type: 'recall_result', ok: true });
+    this.log(`쪽지 회수: ${this._userLabel(ws.userId)} → ${m.to.length}명` +
+      (m.readBy.length ? ` (이미 읽은 사람 ${m.readBy.length}명)` : ''));
+    this._send(ws, { type: 'recall_result', ok: true, messageId: m.id, readCount: m.readBy.length });
     for (const uid of new Set([m.from, ...m.to])) {
-      this._sendTo(uid, { type: 'message_recalled', messageId: m.id });
+      if (uid === ws.userId) continue; // 보낸 사람은 recall_result 로 처리
+      this._sendTo(uid, {
+        type: 'message_recalled', messageId: m.id,
+        from: this._userLabel(m.from), wasRead: m.readBy.includes(uid)
+      });
     }
   }
 
@@ -639,7 +643,8 @@ class MessengerServer {
       text,
       attachments,
       time: Date.now(),
-      readBy: []
+      // 나에게 보내기: 내가 받는 사람에 들어 있으면 보낸 즉시 읽은 것으로 둔다
+      readBy: to.includes(ws.userId) ? [ws.userId] : []
     };
     if (style) m.style = style;
     if (html) m.html = html;
@@ -724,7 +729,8 @@ class MessengerServer {
       if (!to.length || !this.db.users.some(u => u.id === s.from)) continue;
       const m = {
         id: newId(), from: s.from, to, text: s.text,
-        attachments: s.attachments, time: Date.now(), readBy: [], scheduled: true
+        attachments: s.attachments, time: Date.now(),
+        readBy: to.includes(s.from) ? [s.from] : [], scheduled: true
       };
       if (s.style) m.style = s.style;
       if (s.html) m.html = s.html;
