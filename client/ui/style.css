@@ -469,7 +469,8 @@ body.dark .admin-table th, body.dark .admin-table td { border-color: #333b47; }
 .poll-opt { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 14px; }
 .poll-opt input[type=radio] { width: auto; }
 .poll-bar-wrap { flex: 1; background: #eef1f6; border-radius: 6px; height: 16px; position: relative; overflow: hidden; min-width: 80px; }
-.poll-bar { background: #64a9e8; height: 100%; border-radius: 6px; transition: width .3s; }
+/* span 은 기본이 inline 이라 width 가 무시되어 막대가 안 보였음 → block 으로 */
+.poll-bar { display: block; background: #64a9e8; height: 100%; border-radius: 6px; transition: width .3s; }
 .poll-cnt { font-size: 13px; color: #556; width: 76px; text-align: right; flex-shrink: 0; }
 .poll-meta { font-size: 13px; color: #556; margin-top: 8px; }
 .poll-closed { color: #c62828; font-weight: bold; }
@@ -488,8 +489,22 @@ body.dark .poll-tag { background: #1d3a5f; color: #7fbcf7; }
   font-size: 12px; color: #667; margin: -2px 0 4px 20px; line-height: 1.5; word-break: break-all;
 }
 body.dark .poll-voters { color: #94a0af; }
-.poll-btns { display: flex; gap: 6px; margin-top: 10px; }
+.poll-btns { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 .poll-btns button { padding: 5px 12px; font-size: 13px; }
+.poll-btns .poll-close-btn { margin-left: auto; color: #c62828; }
+/* 진행 중: 결과는 마감 후 공개 */
+.poll-hidden {
+  margin-top: 8px; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  background: #fff8e1; color: #8d6e00; border: 1px dashed #f0c96a;
+}
+body.dark .poll-hidden { background: #3a3218; color: #ffd76a; border-color: #6b5a24; }
+.poll-tag-done { background: #ffebee; color: #c62828; }
+body.dark .poll-tag-done { background: #4a2222; color: #ff8a80; }
+/* 마감 후 가장 많이 받은 항목 강조 */
+.poll-top .poll-bar { background: #1e88e5; }
+.poll-top .poll-pick span, .poll-top .poll-cnt { font-weight: bold; color: #1565c0; }
+body.dark .poll-top .poll-bar { background: #42a5f5; }
+body.dark .poll-top .poll-pick span, body.dark .poll-top .poll-cnt { color: #90caf9; }
 /* 설문 만들 때의 선택 방식 */
 .poll-setting-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
 /* 채팅방 설문 카드 */
@@ -557,6 +572,30 @@ body.dark .att-inbody { color: #81c784; }
 body.dark .signup-item { background: #262c36; border-color: #39424f; }
 body.dark .signup-item .su-id { background: #1d3a5f; color: #7fbcf7; }
 body.dark .signup-item .su-detail { color: #9aa5b3; }
+
+/* 조직도 접속 상태 필터 (전체 / 접속 / 미접속) */
+.presence-filter {
+  display: flex; gap: 2px; background: #eef2f7; border-radius: 8px; padding: 3px;
+}
+.presence-filter button {
+  flex: 1; border: none; background: transparent; padding: 5px 4px; font-size: 13px;
+  border-radius: 6px; color: #456; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  white-space: nowrap;
+}
+.presence-filter button:hover { background: rgba(255, 255, 255, .7); }
+.presence-filter button.active {
+  background: #fff; color: #1565c0; font-weight: bold; box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+}
+.presence-filter .pf-n { font-size: 11px; color: #789; font-weight: normal; }
+.presence-filter button.active .pf-n { color: #1565c0; }
+.pf-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.pf-dot.on { background: #43a047; }
+.pf-dot.off { background: #b0b8c4; }
+body.dark .presence-filter { background: #2a313c; }
+body.dark .presence-filter button { color: #94a0af; }
+body.dark .presence-filter button:hover { background: rgba(255, 255, 255, .06); }
+body.dark .presence-filter button.active { background: #1d3a5f; color: #7fbcf7; }
+body.dark .presence-filter button.active .pf-n { color: #7fbcf7; }
 
 /* 조직도 다중 선택 */
 .tree-sel-bar {

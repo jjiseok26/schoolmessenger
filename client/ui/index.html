@@ -96,6 +96,12 @@
         <input id="searchInput" placeholder="🔍 이름/부서 검색">
         <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
       </div>
+      <!-- 접속 상태로 조직도 거르기 -->
+      <div id="presenceFilter" class="presence-filter" role="tablist" title="접속 상태로 골라 보기">
+        <button type="button" data-f="all" class="active">전체 <span class="pf-n"></span></button>
+        <button type="button" data-f="online"><span class="pf-dot on"></span>접속 <span class="pf-n"></span></button>
+        <button type="button" data-f="offline"><span class="pf-dot off"></span>미접속 <span class="pf-n"></span></button>
+      </div>
       <div id="treeSelBar" class="tree-sel-bar">
         <label class="chk" style="margin:0"><input type="checkbox" id="treeSelAll"> 전체 선택</label>
         <span id="treeSelCount" class="sel-count"></span>
@@ -278,6 +284,7 @@
     </div>
     <div class="modal-btns">
       <button id="detailChat" style="display:none">💬 대화</button>
+      <button id="detailRoom" style="display:none" title="이 쪽지를 주고받은 사람들로 채팅방 만들기">👥 채팅방 만들기</button>
       <button id="detailPrint">🖨 인쇄</button>
       <button id="detailDelete" class="danger-text" style="display:none">삭제</button>
       <button id="detailRecall" class="danger-text" style="display:none">회수</button>
@@ -309,7 +316,7 @@
         <label class="chk" style="margin:0"><input type="checkbox" id="pollMulti"> 여러 항목 선택 허용</label>
         <label class="chk" style="margin:0"><input type="checkbox" id="pollAnon"> 투표자 미공개(익명)</label>
       </div>
-      <p class="modal-hint" style="margin-top:6px">💡 미공개로 하지 않으면 각 항목에 투표한 사람의 이름이 표시됩니다.</p>
+      <p class="modal-hint" style="margin-top:6px">💡 투표 결과는 설문이 끝난 뒤(마감 시각 또는 [지금 마감])에 공개됩니다.<br>미공개로 하지 않으면 결과와 함께 각 항목에 투표한 사람의 이름도 표시됩니다.</p>
     </div>
     <div id="noticeFileList" class="att-list"></div>
     <div class="row" style="margin-top:8px">
@@ -345,6 +352,7 @@
       <label class="chk" style="margin:0"><input type="checkbox" id="rpMulti"> 여러 항목 선택 허용</label>
       <label class="chk" style="margin:0"><input type="checkbox" id="rpAnon"> 투표자 미공개(익명)</label>
     </div>
+    <p class="modal-hint" style="margin-top:6px">💡 투표 결과는 설문이 끝난 뒤(마감 시각 또는 [지금 마감])에 공개됩니다.</p>
     <div id="rpError" class="error"></div>
     <div class="modal-btns">
       <button id="rpCancel">취소</button>

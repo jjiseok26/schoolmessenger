@@ -73,10 +73,13 @@ function normalizePoll(p) {
       .filter(i => Number.isInteger(i) && i >= 0 && i < options.length);
     if (arr.length) votes[uid] = arr;
   }
+  const deadline = Number(p.deadline) || 0;
   return {
     q: String(p.q || '').slice(0, 200),
-    options, deadline: Number(p.deadline) || 0,
-    multi: !!p.multi, anon: !!p.anon, votes
+    options, deadline,
+    multi: !!p.multi, anon: !!p.anon, votes,
+    // 결과 공개 알림을 이미 보냈는지. 불러올 때 이미 마감된 설문은 로그인 시 결과가 같이 가므로 보낸 것으로 본다
+    resultSent: !!p.resultSent || deadline <= Date.now()
   };
 }
 
@@ -387,9 +390,19 @@ class MessengerServer {
   }
 
   // ---------- 설문 ----------
-  // 보는 사람에게 보낼 설문 정보. 미공개 설문이면 누가 투표했는지는 아예 보내지 않는다.
+  // 보는 사람에게 보낼 설문 정보.
+  // - 마감 전에는 항목별 결과(표 수·투표자)를 아예 보내지 않는다 → 마감 후에만 결과 공개
+  // - 미공개(익명) 설문은 마감 후에도 누가 투표했는지는 보내지 않는다
   _pollView(poll, viewerId) {
     const votes = poll.votes || {};
+    const closed = Date.now() >= poll.deadline;
+    const view = {
+      q: poll.q || '', options: poll.options, deadline: poll.deadline,
+      multi: !!poll.multi, anon: !!poll.anon, closed,
+      total: Object.keys(votes).length, // 참여 인원은 진행 중에도 보여 줌 (결과는 아님)
+      mine: Array.isArray(votes[viewerId]) ? votes[viewerId] : (votes[viewerId] !== undefined ? [votes[viewerId]] : [])
+    };
+    if (!closed) return view;
     const counts = poll.options.map(() => 0);
     const voters = poll.options.map(() => []);
     for (const [uid, v] of Object.entries(votes)) {
@@ -399,14 +412,61 @@ class MessengerServer {
         if (!poll.anon) voters[i].push(uid);
       }
     }
-    const view = {
-      q: poll.q || '', options: poll.options, deadline: poll.deadline,
-      multi: !!poll.multi, anon: !!poll.anon,
-      counts, total: Object.keys(votes).length,
-      mine: Array.isArray(votes[viewerId]) ? votes[viewerId] : (votes[viewerId] !== undefined ? [votes[viewerId]] : [])
-    };
+    view.counts = counts;
     if (!poll.anon) view.voters = voters;
     return view;
+  }
+
+  // 마감 시각이 지난 설문은 결과를 공개해야 하므로 한 번만 다시 보내 준다 (10초 주기 타이머)
+  _announceClosedPolls() {
+    const now = Date.now();
+    let changed = false;
+    for (const n of this.db.notices) {
+      if (n.poll && n.poll.deadline <= now && !n.poll.resultSent) {
+        n.poll.resultSent = true;
+        changed = true;
+        this.log(`설문 마감·결과 공개: "${n.title}" (참여 ${Object.keys(n.poll.votes || {}).length}명)`);
+        this._broadcastNotice('notice_updated', n);
+      }
+    }
+    for (const m of this.db.roomMsgs) {
+      if (m.poll && m.poll.deadline <= now && !m.poll.resultSent) {
+        m.poll.resultSent = true;
+        changed = true;
+        const room = this.db.rooms.find(r => r.id === m.roomId);
+        if (room) this._sendRoomMsg(room, m, 'room_message_updated');
+      }
+    }
+    if (changed) this._saveSoon();
+  }
+
+  // 설문 지금 마감 — 공지 설문은 작성자·관리자, 채팅방 설문은 만든 사람·관리자(방 참여자)만
+  _doClosePoll(ws, msg) {
+    const user = this.db.users.find(u => u.id === ws.userId);
+    if (!user) return;
+    const deny = (error) => this._send(ws, { type: 'error', error });
+    if (msg.noticeId) {
+      const n = this.db.notices.find(x => x.id === msg.noticeId);
+      if (!n || !n.poll) return;
+      if (n.authorId !== user.id && !user.admin) return deny('설문을 마감할 권한이 없습니다.');
+      if (Date.now() >= n.poll.deadline) return;
+      n.poll.deadline = Date.now();
+      n.poll.resultSent = true;
+      this._saveSoon();
+      this.log(`설문 조기 마감: "${n.title}" — ${user.name}`);
+      return this._broadcastNotice('notice_updated', n);
+    }
+    const room = this.db.rooms.find(r => r.id === msg.roomId);
+    if (!room || !room.members.includes(user.id)) return;
+    const m = this.db.roomMsgs.find(x => x.id === msg.msgId && x.roomId === room.id);
+    if (!m || !m.poll) return;
+    if (m.from !== user.id && !user.admin) return deny('설문을 만든 사람만 마감할 수 있습니다.');
+    if (Date.now() >= m.poll.deadline) return;
+    m.poll.deadline = Date.now();
+    m.poll.resultSent = true;
+    this._saveSoon();
+    this.log(`채팅방 설문 조기 마감: "${m.poll.q}" — ${user.name} (${room.name})`);
+    this._sendRoomMsg(room, m, 'room_message_updated');
   }
 
   _noticeView(n, viewerId) {
@@ -439,7 +499,7 @@ class MessengerServer {
 
   // 투표 반영. 선택이 비어 있으면 투표 취소. 반환값: 오류 메시지 또는 null
   _applyVote(poll, userId, raw) {
-    if (Date.now() > poll.deadline) return '설문이 마감되었습니다.';
+    if (Date.now() >= poll.deadline) return '설문이 마감되었습니다.';
     let opts = [...new Set((Array.isArray(raw) ? raw : [raw]).map(Number))]
       .filter(i => Number.isInteger(i) && i >= 0 && i < poll.options.length);
     if (!poll.multi) opts = opts.slice(0, 1);
@@ -487,6 +547,7 @@ class MessengerServer {
       case 'room_message': return this._doRoomMessage(ws, msg);
       case 'room_poll': return this._doRoomPoll(ws, msg);
       case 'vote_room_poll': return this._doVoteRoomPoll(ws, msg);
+      case 'close_poll': return this._doClosePoll(ws, msg);
       case 'add_room_members': return this._doAddRoomMembers(ws, msg);
       case 'leave_room': return this._doLeaveRoom(ws, msg);
       case 'post_notice': return this._doPostNotice(ws, msg);
@@ -704,6 +765,7 @@ class MessengerServer {
 
   // ---------- 예약 발송 ----------
   _deliverDue() {
+    this._announceClosedPolls(); // 마감된 설문 결과 공개
     const now = Date.now();
     // 예약 공지 발행
     const dueNotices = this.db.scheduledNotices.filter(s => s.publishAt <= now);
@@ -996,7 +1058,10 @@ class MessengerServer {
     // 설문 마감 시각만 연장/변경 가능 (기존 투표·항목·선택 방식은 그대로)
     if (n.poll && msg.pollDeadline) {
       const dl = Number(msg.pollDeadline) || 0;
-      if (dl > Date.now()) n.poll.deadline = dl;
+      if (dl > Date.now()) {
+        n.poll.deadline = dl;
+        n.poll.resultSent = false; // 마감을 다시 미뤘으면 결과도 다시 가려지고, 새 마감 때 다시 공개
+      }
     }
     this._saveSoon();
     this.log(`공지 수정: "${title}" — ${user.name}`);

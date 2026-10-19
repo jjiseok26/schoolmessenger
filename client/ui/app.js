@@ -94,6 +94,7 @@ const S = {
   userOrder: {}, deptFlat: [], deptDisplayed: {},
   extraDepts: [], derivedDepts: new Set(),
   treeSel: new Set(), treeVisible: [],
+  presenceFilter: 'all',          // 조직도: 전체 / 접속(online) / 미접속(offline)
   ws: null, loggedIn: false, intentionalClose: false,
   aesKey: null, recvChain: Promise.resolve(), sendChain: Promise.resolve(),
   tab: 'notice', chatPeer: null,
@@ -398,6 +399,12 @@ function handleServer(m) {
       if (!S.roomMsgs[m.room.id]) S.roomMsgs[m.room.id] = m.history || [];
       if (m.room.creator !== S.me.id) notifyUser('👥 채팅방 초대', `'${m.room.name}' 채팅방에 초대되었습니다.`);
       renderRooms(); updateBadges();
+      // 쪽지에서 만든 채팅방은 만들자마자 그 방으로 이동
+      if (m.room.creator === S.me.id && S.openRoomAfterCreate) {
+        S.openRoomAfterCreate = false;
+        showTab('rooms');
+        openRoom(m.room.id);
+      }
       break;
     }
     case 'room_message': {
@@ -815,8 +822,32 @@ function buildUserRow(u, dept, level) {
   return row;
 }
 
+// 조직도 접속 상태 필터: 'all' | 'online' | 'offline'
+function presenceMatch(u) {
+  if (S.presenceFilter === 'online') return !!u.online;
+  if (S.presenceFilter === 'offline') return !u.online;
+  return true;
+}
+
+// 필터 버튼의 인원 수와 선택 표시
+function syncPresenceFilter() {
+  const visible = S.users.filter(u => !(u.system && S.me.id !== u.id));
+  const n = {
+    all: visible.length,
+    online: visible.filter(u => u.online).length,
+    offline: visible.filter(u => !u.online).length
+  };
+  for (const b of $$('#presenceFilter button')) {
+    b.classList.toggle('active', b.dataset.f === S.presenceFilter);
+    b.querySelector('.pf-n').textContent = n[b.dataset.f];
+  }
+}
+
 function renderTree() {
   const q = $('#searchInput').value.trim().toLowerCase();
+  // 검색이나 접속 상태로 거르는 중이면 접힌 부서도 펼치고 빈 부서는 숨긴다
+  const filtering = !!q || S.presenceFilter !== 'all';
+  syncPresenceFilter();
   const tree = $('#orgTree');
   tree.innerHTML = '';
   const depts = new Map();
@@ -827,6 +858,7 @@ function renderTree() {
   };
   for (const u of S.users) {
     if (u.system && S.me.id !== u.id) continue; // 시스템 기본 계정(admin)만 숨김 — 관리자 권한 사용자는 항상 표시
+    if (!presenceMatch(u)) continue;
     const uDepts = u.depts || [u.dept];
     if (q && !(u.name.toLowerCase().includes(q) || uDepts.join(' ').toLowerCase().includes(q) ||
                (u.subject || '').toLowerCase().includes(q) ||
@@ -842,7 +874,7 @@ function renderTree() {
     }
   }
   // 빈 부서(관리자가 추가)도 표시 — 드래그로 인원 배치 가능
-  if (!q) {
+  if (!filtering) {
     for (const d of (S.extraDepts || [])) if (!depts.has(d)) depts.set(d, []);
   }
   S.treeVisible = [];
@@ -882,8 +914,8 @@ function renderTree() {
     if (!isGroup) {
       // 일반(단일) 부서
       const it = root.items[0];
-      tree.appendChild(buildDeptHeader([it.full], it.full, it.users, 0, it.full, q));
-      if (!(S.closedDepts.has(it.full) && !q)) {
+      tree.appendChild(buildDeptHeader([it.full], it.full, it.users, 0, it.full, filtering));
+      if (!(S.closedDepts.has(it.full) && !filtering)) {
         for (const u of it.users) tree.appendChild(buildUserRow(u, it.full, 1));
       }
       continue;
@@ -892,23 +924,37 @@ function renderTree() {
     const allUsers = root.items.flatMap(i => i.users);
     const allFulls = root.items.map(i => i.full);
     const pKey = 'P:' + root.name;
-    tree.appendChild(buildDeptHeader(allFulls, root.name, allUsers, 0, pKey, q));
-    if (S.closedDepts.has(pKey) && !q) continue;
+    tree.appendChild(buildDeptHeader(allFulls, root.name, allUsers, 0, pKey, filtering));
+    if (S.closedDepts.has(pKey) && !filtering) continue;
     for (const it of root.items) {
       if (it.label === null) {
         // 상위 부서 직속 인원
         for (const u of it.users) tree.appendChild(buildUserRow(u, it.full, 1));
         continue;
       }
-      tree.appendChild(buildDeptHeader([it.full], it.label, it.users, 1, it.full, q));
-      if (!(S.closedDepts.has(it.full) && !q)) {
+      tree.appendChild(buildDeptHeader([it.full], it.label, it.users, 1, it.full, filtering));
+      if (!(S.closedDepts.has(it.full) && !filtering)) {
         for (const u of it.users) tree.appendChild(buildUserRow(u, it.full, 2));
       }
     }
   }
-  if (!tree.children.length) tree.innerHTML = '<div class="empty">검색 결과가 없습니다</div>';
+  if (!tree.children.length) {
+    const msg = q ? '검색 결과가 없습니다'
+      : S.presenceFilter === 'online' ? '지금 접속 중인 사람이 없습니다'
+      : S.presenceFilter === 'offline' ? '모두 접속 중입니다'
+      : '표시할 사람이 없습니다';
+    tree.innerHTML = `<div class="empty">${msg}</div>`;
+  }
   syncTreeSelBar();
 }
+
+$$('#presenceFilter button').forEach(b => b.addEventListener('click', () => {
+  S.presenceFilter = b.dataset.f;
+  // 화면에서 사라진 사람은 선택에서도 뺀다 (안 보이는 사람에게 쪽지가 가지 않도록)
+  renderTree();
+  for (const id of [...S.treeSel]) if (!S.treeVisible.includes(id)) S.treeSel.delete(id);
+  syncTreeSelBar();
+}));
 
 // ---------- 부서 이름 변경 (관리자) ----------
 function openDeptRenameModal(preFulls) {
@@ -1062,9 +1108,12 @@ function msgItem(m, mode) {
   btns.className = 'msg-actions';
   // 나에게 보낸 메모는 "대화" 상대가 없다
   const peerId = self ? null : (mode === 'inbox' ? m.from : m.to.find(id => id !== S.me.id));
+  // 여러 사람이 함께 받은 쪽지면 그 사람들로 바로 채팅방을 만들 수 있게
+  const group = msgParticipants(m);
   btns.innerHTML = `
     ${mode === 'inbox' ? '<button data-a="reply" title="답장">↩ 답장</button>' : ''}
     ${peerId ? `<button data-a="chat" title="${esc(nameOf(peerId))} 님과 대화">💬</button>` : ''}
+    ${group.length >= 2 ? `<button data-a="room" title="이 쪽지를 주고받은 ${group.length}명과 채팅방 만들기">👥</button>` : ''}
     <button data-a="fwd" title="전달">➦ 전달</button>
     <button data-a="del" class="danger-text" title="삭제">✕</button>`;
   btns.onclick = (e) => {
@@ -1073,6 +1122,7 @@ function msgItem(m, mode) {
     if (!b) return;
     if (b.dataset.a === 'reply') replyToMessage(m);
     if (b.dataset.a === 'chat') openChat(peerId);
+    if (b.dataset.a === 'room') roomFromMessage(m);
     if (b.dataset.a === 'fwd') forwardMessage(m);
     if (b.dataset.a === 'del' && confirm('이 쪽지를 내 보관함에서 삭제할까요?\n(상대방 화면에는 그대로 남습니다)')) {
       send({ type: 'delete_message', messageId: m.id });
@@ -1375,8 +1425,10 @@ function renderRoomChat() {
       bubble.innerHTML = `<span class="bwho">${esc(nameOf(m.from))} 님의 설문</span>`;
       const box = document.createElement('div');
       bubble.appendChild(box);
+      const canClose = m.from === S.me.id || S.me.admin; // 만든 사람·관리자는 지금 마감 가능
       renderPoll(box, m.poll, (options) =>
-        send({ type: 'vote_room_poll', roomId: m.roomId, msgId: m.id, options }));
+        send({ type: 'vote_room_poll', roomId: m.roomId, msgId: m.id, options }),
+        { onClose: canClose ? () => send({ type: 'close_poll', roomId: m.roomId, msgId: m.id }) : null });
       const t = document.createElement('span');
       t.className = 'btime';
       t.textContent = fmtTime(m.time);
@@ -1473,23 +1525,60 @@ function pasteImageToChat(kind) {
 $('#chatText').addEventListener('paste', pasteImageToChat('chat'));
 $('#roomText').addEventListener('paste', pasteImageToChat('room'));
 
-function openRoomModal(mode) {
+// preset: { members: [...], name } — 쪽지에서 채팅방을 만들 때 대상과 이름을 미리 채움
+function openRoomModal(mode, preset) {
   S.roomModalMode = mode;
-  S.roomPick = new Set();
-  $('#roomModalTitle').textContent = mode === 'create' ? '채팅방 만들기' : '채팅방에 초대';
+  S.roomPick = new Set(((preset && preset.members) || []).filter(id => id !== S.me.id && userById(id)));
+  $('#roomModalTitle').textContent = mode === 'create'
+    ? (preset ? '👥 쪽지 받은 사람들로 채팅방 만들기' : '채팅방 만들기')
+    : '채팅방에 초대';
   $('#roomModalOk').textContent = mode === 'create' ? '만들기' : '초대';
   $('#roomNameRow').style.display = mode === 'create' ? '' : 'none';
-  $('#roomNameInput').value = '';
+  $('#roomNameInput').value = (preset && preset.name) || '';
   $('#roomModalError').textContent = '';
   const exclude = mode === 'invite' && roomById(S.currentRoom) ? roomById(S.currentRoom).members : [];
   buildPicker($('#roomPicker'), $('#roomChips'), S.roomPick, exclude);
   $('#roomModal').style.display = 'flex';
-  if (mode === 'create') $('#roomNameInput').focus();
+  if (mode === 'create') {
+    // 이름이 미리 채워져 있으면 끝으로 커서를 둬 바로 고칠 수 있게
+    setTimeout(() => {
+      const inp = $('#roomNameInput');
+      inp.focus();
+      inp.setSelectionRange(inp.value.length, inp.value.length);
+    }, 60);
+  }
+}
+
+// ---------- 쪽지 → 채팅방 ----------
+// 쪽지를 주고받은 사람들 (보낸 사람 + 받는 사람, 나 제외)
+function msgParticipants(m) {
+  return [...new Set([m.from, ...m.to])].filter(id => id !== S.me.id && userById(id));
+}
+
+function roomFromMessage(m) {
+  const members = msgParticipants(m);
+  if (!members.length) return alert('함께 대화할 사람이 없습니다.');
+  $('#detailModal').style.display = 'none';
+  // 똑같은 사람들로 된 채팅방이 이미 있으면 그 방으로 갈지 먼저 묻는다
+  const want = new Set([S.me.id, ...members]);
+  const same = S.rooms.find(r => r.members.length === want.size && r.members.every(id => want.has(id)));
+  if (same && confirm(`같은 사람들로 된 채팅방 '${same.name}'이(가) 이미 있습니다.\n그 방으로 갈까요?\n\n[취소]를 누르면 새 채팅방을 만듭니다.`)) {
+    showTab('rooms');
+    openRoom(same.id);
+    return;
+  }
+  const first = (m.text || '').trim().split(/\r?\n/)[0].trim().slice(0, 20);
+  const name = first ? `쪽지: ${first}` : `쪽지 대화 (${members.length + 1}명)`;
+  S.openRoomAfterCreate = true; // 만들어지면 바로 그 방으로 이동
+  openRoomModal('create', { members, name });
 }
 
 $('#roomCreateBtn').addEventListener('click', () => openRoomModal('create'));
 $('#roomInviteBtn').addEventListener('click', () => openRoomModal('invite'));
-$('#roomModalCancel').addEventListener('click', () => { $('#roomModal').style.display = 'none'; });
+$('#roomModalCancel').addEventListener('click', () => {
+  S.openRoomAfterCreate = false;
+  $('#roomModal').style.display = 'none';
+});
 $('#roomModalOk').addEventListener('click', () => {
   if (!S.roomPick.size) return $('#roomModalError').textContent = '대화 상대를 선택하세요.';
   if (S.roomModalMode === 'create') {
@@ -1583,7 +1672,9 @@ function renderNotices() {
     const el = document.createElement('div');
     el.className = 'msg-item';
     const pollBadge = n.poll
-      ? (Date.now() > n.poll.deadline ? ' <span style="color:#c62828">📊마감</span>' : ' <span style="color:#1565c0">📊설문</span>')
+      ? ((n.poll.closed || Date.now() >= n.poll.deadline)
+        ? ' <span style="color:#c62828">📊마감·결과 공개</span>'
+        : ' <span style="color:#1565c0">📊설문 진행 중</span>')
       : '';
     const clipBadge = (n.attachments || []).length ? ' <span class="clip">📎</span>' : '';
     el.innerHTML = `<span class="type-chip tc-notice">공지</span><span class="who">📢 ${esc(n.authorName)}</span>
@@ -1976,12 +2067,16 @@ function openDetail(m, mode) {
     files: m.attachments.map(a => `${a.name} (${fmtSize(a.size)})`)
   });
   $('#detailReply').style.display = mode === 'inbox' ? '' : 'none';
+  // 공지 창에서 '공지 삭제' 로 바뀐 글자가 남지 않도록 매번 되돌림
+  $('#detailReply').textContent = '답장';
   $('#detailReply').onclick = () => {
     $('#detailModal').style.display = 'none';
     replyToMessage(m);
   };
-  // 1:1 대화창으로 이동 (받은쪽지는 보낸이, 보낸쪽지는 첫 수신자)
-  const peer = mode === 'inbox' ? m.from : m.to.find(id => id !== S.me.id);
+  // 1:1 대화창으로 이동 (받은쪽지는 보낸이, 보낸쪽지는 첫 수신자 — 나에게 보낸 메모는 없음)
+  const peer = mode === 'inbox'
+    ? (m.from !== S.me.id ? m.from : null)
+    : m.to.find(id => id !== S.me.id);
   $('#detailChat').style.display = peer ? '' : 'none';
   if (peer) {
     $('#detailChat').textContent = `💬 ${nameOf(peer)} 님과 대화`;
@@ -1990,6 +2085,11 @@ function openDetail(m, mode) {
       openChat(peer);
     };
   }
+  // 이 쪽지를 주고받은 사람들(2명 이상)로 채팅방 만들기
+  const others = msgParticipants(m);
+  $('#detailRoom').style.display = others.length >= 2 ? '' : 'none';
+  $('#detailRoom').textContent = `👥 ${others.length}명과 채팅방 만들기`;
+  $('#detailRoom').onclick = () => roomFromMessage(m);
   // 전달
   $('#detailForward').style.display = '';
   $('#detailForward').textContent = '전달';
@@ -2022,47 +2122,63 @@ function openDetail(m, mode) {
 
 // ---------- 설문조사 (공지 / 채팅방 공용) ----------
 // p는 서버가 보내 주는 보기용 설문 객체:
-//   { q, options[], deadline, multi, anon, counts[], total, mine[], voters[][] (공개 설문일 때만) }
+//   { q, options[], deadline, multi, anon, closed, total, mine[],
+//     counts[] / voters[][] — 마감된 뒤에만 옴 (voters는 투표자 공개 설문일 때만) }
 let pollSeq = 0;
 
-function pollHtml(p, name) {
-  const closed = Date.now() > p.deadline;
+function pollHtml(p, name, canClose) {
+  const closed = !!p.closed || Date.now() >= p.deadline;
+  const hasResult = Array.isArray(p.counts); // 서버는 마감 후에만 결과를 보내 줌
   const mine = p.mine || [];
   const type = p.multi ? 'checkbox' : 'radio';
-  let html = `<div class="poll-box"><div class="poll-title"><b>📊 ${p.q ? esc(p.q) : '설문조사'}</b>
+  let html = `<div class="poll-box${closed ? ' poll-done' : ''}"><div class="poll-title"><b>📊 ${p.q ? esc(p.q) : '설문조사'}</b>
     <span class="poll-tag">${p.multi ? '여러 개 선택' : '하나만 선택'}</span>
-    <span class="poll-tag">${p.anon ? '익명 투표' : '투표자 공개'}</span></div>`;
+    <span class="poll-tag">${p.anon ? '익명 투표' : '투표자 공개'}</span>
+    ${closed ? '<span class="poll-tag poll-tag-done">마감</span>' : ''}</div>`;
   p.options.forEach((opt, i) => {
-    const cnt = (p.counts || [])[i] || 0;
-    const pct = p.total ? Math.round(cnt / p.total * 100) : 0;
     const voted = mine.includes(i);
-    html += `<div class="poll-opt">
-      <label class="poll-pick"><input type="${type}" name="${name}" value="${i}" ${voted ? 'checked' : ''} ${closed ? 'disabled' : ''}>
-      <span>${esc(opt)}${voted ? ' ✔' : ''}</span></label>
+    const pick = `<label class="poll-pick"><input type="${type}" name="${name}" value="${i}" ${voted ? 'checked' : ''} ${closed ? 'disabled' : ''}>
+      <span>${esc(opt)}${voted ? ' ✔' : ''}</span></label>`;
+    if (!hasResult) {
+      // 진행 중: 결과(표 수·막대·투표자)는 숨기고 고르기만
+      html += `<div class="poll-opt">${pick}</div>`;
+      return;
+    }
+    const cnt = p.counts[i] || 0;
+    const pct = p.total ? Math.round(cnt / p.total * 100) : 0;
+    const top = cnt > 0 && cnt === Math.max(...p.counts);
+    html += `<div class="poll-opt${top ? ' poll-top' : ''}">${pick}
       <span class="poll-bar-wrap"><span class="poll-bar" style="width:${pct}%"></span></span>
       <span class="poll-cnt">${cnt}표 (${pct}%)</span>
     </div>`;
     if (p.voters) {
       const names = (p.voters[i] || []).map(uid => nameOf(uid));
-      html += `<div class="poll-voters">${names.length ? '└ ' + esc(names.join(', ')) : '└ 아직 없음'}</div>`;
+      html += `<div class="poll-voters">${names.length ? '└ ' + esc(names.join(', ')) : '└ 없음'}</div>`;
     }
   });
+  if (!hasResult) {
+    html += closed
+      ? '<div class="poll-hidden">⏳ 결과를 집계하고 있습니다… 잠시 후 표시됩니다.</div>'
+      : `<div class="poll-hidden">🔒 결과는 설문이 끝나면 공개됩니다. (마감: ${fmtFull(p.deadline)})</div>`;
+  }
   html += `<div class="poll-meta">참여 ${p.total || 0}명 · 마감: ${fmtFull(p.deadline)} `;
   html += closed ? '<span class="poll-closed">(마감됨)</span>' : '';
   html += '</div>';
   if (!closed) {
     html += `<div class="poll-btns"><button class="primary poll-vote-btn">${mine.length ? '투표 변경' : '투표하기'}</button>`;
     if (mine.length) html += '<button class="poll-cancel-btn">투표 취소</button>';
+    if (canClose) html += '<button class="poll-close-btn" title="지금 마감하고 결과를 공개합니다">⏹ 지금 마감</button>';
     html += '</div>';
   }
   html += '</div>';
   return html;
 }
 
-// 설문을 container에 그리고 투표 버튼을 연결 (onVote: 선택한 항목 번호 배열)
-function renderPoll(container, poll, onVote) {
+// 설문을 container에 그리고 버튼을 연결
+//   onVote(선택한 항목 번호 배열) / opt.onClose: 있으면 [지금 마감] 버튼 표시 (만든 사람·관리자)
+function renderPoll(container, poll, onVote, opt = {}) {
   const name = 'pollVote' + (++pollSeq);
-  container.innerHTML = pollHtml(poll, name);
+  container.innerHTML = pollHtml(poll, name, !!opt.onClose);
   const btn = container.querySelector('.poll-vote-btn');
   if (btn) btn.onclick = () => {
     const sel = [...container.querySelectorAll(`input[name="${name}"]:checked`)].map(el => Number(el.value));
@@ -2071,6 +2187,19 @@ function renderPoll(container, poll, onVote) {
   };
   const cancel = container.querySelector('.poll-cancel-btn');
   if (cancel) cancel.onclick = () => { if (confirm('투표를 취소할까요?')) onVote([]); };
+  const close = container.querySelector('.poll-close-btn');
+  if (close) close.onclick = () => {
+    if (confirm('설문을 지금 마감할까요?\n마감하면 더 이상 투표할 수 없고 결과가 모두에게 공개됩니다.')) opt.onClose();
+  };
+  // 보고 있는 동안 마감 시각이 지나면 "집계 중" 으로 바꿔 둔다 (결과는 서버가 곧 보내 줌)
+  const left = poll.deadline - Date.now();
+  if (!poll.closed && left > 0 && left < 2147483647) {
+    setTimeout(() => {
+      if (container.isConnected && container.querySelector('.poll-vote-btn')) {
+        renderPoll(container, poll, onVote, opt);
+      }
+    }, left + 300);
+  }
 }
 
 // 쪽지/공지 인쇄: 인쇄 영역에 내용을 채우고 시스템 인쇄 대화상자 호출
@@ -2105,11 +2234,14 @@ function openNoticeDetail(n) {
   const pollBox = $('#detailPoll');
   pollBox.innerHTML = '';
   if (n.poll) {
-    renderPoll(pollBox, n.poll, (options) => send({ type: 'vote_poll', noticeId: n.id, options }));
+    const canClose = S.me.admin || n.authorId === S.me.id; // 작성자·관리자는 지금 마감 가능
+    renderPoll(pollBox, n.poll, (options) => send({ type: 'vote_poll', noticeId: n.id, options }),
+      { onClose: canClose ? () => send({ type: 'close_poll', noticeId: n.id }) : null });
   }
   $('#detailRecall').style.display = 'none';
   $('#detailDelete').style.display = 'none';
   $('#detailChat').style.display = 'none';
+  $('#detailRoom').style.display = 'none';
   // 작성자 본인 또는 관리자는 수정·삭제 가능
   const canEdit = S.me.admin || n.authorId === S.me.id;
   $('#detailForward').style.display = canEdit ? '' : 'none';
