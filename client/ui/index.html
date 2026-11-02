@@ -272,10 +272,10 @@
   </div>
 </div>
 
-<!-- 쪽지 상세 모달 -->
+<!-- 공지 상세 모달 (쪽지는 아래 '쪽지 창'으로 여러 개를 동시에 띄움) -->
 <div id="detailModal" class="modal-bg" style="display:none">
   <div class="modal large scroll-layout">
-    <h2 id="detailTitle">쪽지</h2>
+    <h2 id="detailTitle">공지</h2>
     <div class="modal-scroll">
     <div id="detailMeta" class="meta"></div>
     <div id="detailBody" class="detail-body"></div>
@@ -283,11 +283,7 @@
     <div id="detailPoll"></div>
     </div>
     <div class="modal-btns">
-      <button id="detailChat" style="display:none">💬 대화</button>
-      <button id="detailRoom" style="display:none" title="이 쪽지를 주고받은 사람들로 채팅방 만들기">👥 채팅방 만들기</button>
       <button id="detailPrint">🖨 인쇄</button>
-      <button id="detailDelete" class="danger-text" style="display:none">삭제</button>
-      <button id="detailRecall" class="danger-text" style="display:none">회수</button>
       <button id="detailForward" style="display:none">전달</button>
       <button id="detailReply" class="primary">답장</button>
       <button id="detailClose">닫기</button>
@@ -537,6 +533,14 @@
       <button id="aboutClose" class="primary">닫기</button>
     </div>
   </div>
+</div>
+
+<!-- 쪽지 창: 받은쪽지·보낸쪽지를 여러 개 동시에 띄움 (끌어서 옮기기, 접기, 크기 조절) -->
+<div id="msgWinLayer"></div>
+<div id="msgWinBar" class="msg-win-bar" style="display:none">
+  <span id="msgWinCount"></span>
+  <button id="msgWinFoldAll" type="button" title="모든 쪽지 창을 제목줄만 남기고 접기">접기</button>
+  <button id="msgWinCloseAll" type="button" title="열린 쪽지 창 모두 닫기">모두 닫기</button>
 </div>
 
 <!-- 다운로드 진행 패널 -->

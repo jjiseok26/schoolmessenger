@@ -287,6 +287,34 @@ class MessengerServer {
         });
       });
 
+      // 설문 결과 엑셀(.xlsx) 내려받기 — 마감된 설문만, 볼 수 있는 사람만
+      //   ?token=&noticeId=  (공지 설문)  /  ?token=&roomId=&msgId=  (채팅방 설문, 방 참여자만)
+      app.get('/poll-export', (req, res) => {
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        const userId = this.tokens.get(String(req.query.token || ''));
+        if (!userId) return res.status(401).type('text/plain').send('로그인이 필요합니다.');
+        let src;
+        try {
+          src = this._findPollForExport(userId, req.query);
+        } catch (e) {
+          return res.status(e.status || 400).type('text/plain').send(e.message);
+        }
+        let buf;
+        try {
+          buf = this.buildPollWorkbook(src);
+        } catch (e) {
+          console.error('설문 엑셀 만들기 오류:', e);
+          return res.status(500).type('text/plain').send('엑셀 파일을 만들지 못했습니다.');
+        }
+        const stamp = new Date().toISOString().slice(0, 10);
+        const safeTitle = String(src.title || '설문').replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 40);
+        const fname = `설문결과_${safeTitle}_${stamp}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(fname));
+        this.log(`설문 결과 엑셀 저장: "${src.title}" — ${this._userLabel(userId)}`);
+        res.end(buf);
+      });
+
       app.get('/files/:fid/:name', (req, res) => {
         const fid = String(req.params.fid).replace(/[^a-f0-9]/g, '');
         const file = path.join(this.uploadDir, fid);
@@ -438,6 +466,114 @@ class MessengerServer {
       }
     }
     if (changed) this._saveSoon();
+  }
+
+  // 엑셀로 내보낼 설문 찾기 — 볼 수 있는 사람만, 마감된 설문만. 실패하면 status 가 붙은 Error
+  _findPollForExport(userId, q) {
+    const fail = (status, msg) => Object.assign(new Error(msg), { status });
+    const nameOf = (id) => (this.db.users.find(u => u.id === id) || {}).name || id;
+    let poll, title, kind, author, targets;
+    if (q.noticeId) {
+      const n = this.db.notices.find(x => x.id === String(q.noticeId));
+      if (!n || !n.poll) throw fail(404, '설문을 찾을 수 없습니다.');
+      poll = n.poll;
+      title = n.title;
+      kind = '공지 설문';
+      author = n.authorName || nameOf(n.authorId);
+      targets = this.db.users.filter(u => u.id !== 'admin').map(u => u.id); // 시스템 기본 계정 제외 전체
+    } else {
+      const room = this.db.rooms.find(r => r.id === String(q.roomId || ''));
+      if (!room || !room.members.includes(userId)) throw fail(403, '이 채팅방의 설문은 볼 수 없습니다.');
+      const m = this.db.roomMsgs.find(x => x.id === String(q.msgId || '') && x.roomId === room.id);
+      if (!m || !m.poll) throw fail(404, '설문을 찾을 수 없습니다.');
+      poll = m.poll;
+      title = m.poll.q || '채팅방 설문';
+      kind = `채팅방 설문 (${room.name})`;
+      author = nameOf(m.from);
+      targets = [...room.members];
+    }
+    if (Date.now() < poll.deadline) throw fail(403, '설문이 끝난 뒤에 결과를 받을 수 있습니다.');
+    return { poll, title, kind, author, targets };
+  }
+
+  // 설문 결과 엑셀(.xlsx) 만들기
+  //  - '결과' 시트: 설문 정보 + 항목별 표 수·비율(+ 공개 설문은 투표한 사람)
+  //  - 공개 설문만 '응답자별'(누가 무엇을 골랐는지)·'미참여'(대상 중 투표하지 않은 사람) 시트 추가
+  //    (익명 설문은 투표자 정보는 물론 미참여 명단도 넣지 않음 — 미참여 명단으로 참여자를 알 수 있으므로)
+  buildPollWorkbook({ poll, title, kind, author, targets }) {
+    const XLSX = require('xlsx');
+    const votes = poll.votes || {};
+    const voterIds = Object.keys(votes);
+    const userOf = (id) => this.db.users.find(u => u.id === id);
+    const nameOf = (id) => (userOf(id) || {}).name || id;
+    const deptOf = (u) => (u ? (u.depts || [u.dept]).filter(Boolean).join(', ') : '');
+    const byName = (a, b) => nameOf(a).localeCompare(nameOf(b), 'ko');
+    const pct = (a, b) => (b ? Math.round(a / b * 1000) / 10 : 0);
+    const fmt = (ts) => {
+      const d = new Date(ts), p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    };
+    const counts = poll.options.map(() => 0);
+    const voters = poll.options.map(() => []);
+    for (const [uid, v] of Object.entries(votes)) {
+      for (const i of (Array.isArray(v) ? v : [v])) {
+        if (counts[i] === undefined) continue;
+        counts[i]++;
+        voters[i].push(uid);
+      }
+    }
+    const total = voterIds.length;
+    const targetSet = new Set([...targets, ...voterIds]);
+    const anon = !!poll.anon;
+
+    const rows = [
+      ['설문 결과'],
+      [],
+      ['설문', title],
+      ['구분', kind],
+      ['만든 사람', author],
+      ['마감', fmt(poll.deadline)],
+      ['선택 방식', poll.multi ? '여러 개 선택' : '하나만 선택'],
+      ['투표자', anon ? '미공개(익명)' : '공개'],
+      ['참여', `${total}명 / 대상 ${targetSet.size}명 (참여율 ${pct(total, targetSet.size)}%)`],
+      ['저장한 시각', fmt(Date.now())],
+      [],
+      anon ? ['항목', '표 수', '비율(%)'] : ['항목', '표 수', '비율(%)', '투표한 사람']
+    ];
+    poll.options.forEach((opt, i) => {
+      const r = [opt, counts[i], pct(counts[i], total)];
+      if (!anon) r.push(voters[i].sort(byName).map(nameOf).join(', '));
+      rows.push(r);
+    });
+    if (poll.multi) rows.push([], ['※ 여러 개를 고를 수 있는 설문이라 비율의 합이 100%를 넘을 수 있습니다. (비율 = 표 수 ÷ 참여 인원)']);
+    if (anon) rows.push([], ['※ 익명 설문이라 누가 투표했는지는 담지 않았습니다.']);
+    const wb = XLSX.utils.book_new();
+    const ws1 = XLSX.utils.aoa_to_sheet(rows);
+    ws1['!cols'] = [{ wch: 26 }, { wch: 40 }, { wch: 10 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, ws1, '결과');
+
+    if (!anon) {
+      const r2 = [['이름', '아이디', '부서', '직위', '선택한 항목']];
+      for (const uid of [...voterIds].sort(byName)) {
+        const u = userOf(uid);
+        const picked = (Array.isArray(votes[uid]) ? votes[uid] : [votes[uid]])
+          .filter(i => poll.options[i] !== undefined).map(i => poll.options[i]);
+        r2.push([nameOf(uid), uid, deptOf(u), (u && u.position) || '', picked.join(', ')]);
+      }
+      const ws2 = XLSX.utils.aoa_to_sheet(r2);
+      ws2['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 22 }, { wch: 10 }, { wch: 40 }];
+      XLSX.utils.book_append_sheet(wb, ws2, '응답자별');
+
+      const r3 = [['이름', '아이디', '부서', '직위']];
+      for (const uid of [...targetSet].filter(id => !votes[id]).sort(byName)) {
+        const u = userOf(uid);
+        r3.push([nameOf(uid), uid, deptOf(u), (u && u.position) || '']);
+      }
+      const ws3 = XLSX.utils.aoa_to_sheet(r3);
+      ws3['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 22 }, { wch: 10 }];
+      XLSX.utils.book_append_sheet(wb, ws3, '미참여');
+    }
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   }
 
   // 설문 지금 마감 — 공지 설문은 작성자·관리자, 채팅방 설문은 만든 사람·관리자(방 참여자)만

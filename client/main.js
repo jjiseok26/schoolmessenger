@@ -73,6 +73,17 @@ function saveSettings() {
 function defaultDownloadDir() {
   return path.join(app.getPath('documents'), 'schoolmessenger');
 }
+// 저장 폴더 안에서 겹치지 않는 파일 경로 (같은 이름이 있으면 "이름 (1).확장자" 처럼 숫자를 붙임)
+function uniqueSavePath(name) {
+  const dir = downloadDir();
+  const parsed = path.parse(path.basename(String(name || 'file')) || 'file');
+  let candidate = parsed.base, n = 1;
+  while (fs.existsSync(path.join(dir, candidate))) {
+    candidate = `${parsed.name} (${n++})${parsed.ext}`;
+  }
+  return path.join(dir, candidate);
+}
+
 function downloadDir() {
   const dir = settings.downloadDir || defaultDownloadDir();
   try { fs.mkdirSync(dir, { recursive: true }); return dir; }
@@ -181,13 +192,8 @@ app.whenReady().then(() => {
     // 일반 첨부파일: 다운로드 폴더에 자동 저장 (같은 이름이 있으면 숫자 붙임) + 진행률 표시
     const waiter = pendingSaves.get(item.getURL()); // 열기/폴더 열기를 기다리는 요청
     if (waiter) pendingSaves.delete(item.getURL());
-    const dir = downloadDir();
-    const parsed = path.parse(item.getFilename() || 'file');
-    let candidate = parsed.base, n = 1;
-    while (fs.existsSync(path.join(dir, candidate))) {
-      candidate = `${parsed.name} (${n++})${parsed.ext}`;
-    }
-    const savePath = path.join(dir, candidate);
+    const savePath = uniqueSavePath(item.getFilename() || 'file');
+    const candidate = path.basename(savePath);
     item.setSavePath(savePath);
     const dlId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     const srcUrl = item.getURL();
@@ -317,6 +323,20 @@ ipcMain.handle('save-attachment', (e, url) => new Promise((resolve, reject) => {
   });
   win.webContents.downloadURL(url);
 }));
+
+// 렌더러가 받아 온 파일(설문 결과 엑셀)을 첨부파일 저장 폴더에 저장하고 경로를 돌려줌
+ipcMain.handle('save-file', (e, name, data) => {
+  // 파일 이름 정리: 경로·금지 문자 제거, 엑셀 파일만 허용
+  let base = path.basename(String(name || '')).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 150);
+  if (!base) base = '설문결과.xlsx';
+  if (!/\.xlsx$/i.test(base)) base += '.xlsx';
+  const buf = Buffer.from(data || []);
+  if (!buf.length) throw new Error('받은 파일이 비어 있습니다.');
+  if (buf.length > 50 * 1024 * 1024) throw new Error('파일이 너무 큽니다.');
+  const savePath = uniqueSavePath(base);
+  fs.writeFileSync(savePath, buf);
+  return savePath;
+});
 
 // ---------- 첨부파일 저장 폴더 설정 ----------
 ipcMain.handle('get-download-dir', () => settings.downloadDir || defaultDownloadDir());

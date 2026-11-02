@@ -288,10 +288,13 @@ body.dark .list-toolbar { background: #191d23; }
 .msg-actions { opacity: 1 !important; }
 
 /* 모달 */
+/* 겹침 순서: 쪽지 쓰기 창(10) < 쪽지 창 층(30) < 다른 모달(40) < 우클릭 메뉴(50) < 다운로드 패널(60, 창이 떠 있을 때)
+   → 떠 있는 쪽지 창은 쪽지 쓰기 창 위에 보여서, 쪽지를 보면서 답장·새 쪽지를 쓸 수 있다 */
 .modal-bg {
   position: fixed; inset: 0; background: rgba(0,0,0,.45);
-  display: flex; align-items: center; justify-content: center; z-index: 10;
+  display: flex; align-items: center; justify-content: center; z-index: 40;
 }
+#composeModal { z-index: 10; }
 .modal {
   background: #fff; border-radius: 12px; padding: 22px 24px; width: 560px;
   max-height: 86vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,.3);
@@ -637,7 +640,8 @@ body.dark .tc-notice { background: #4a3419; color: #ffb74d; }
   display: flex; flex-direction: column; gap: 8px; width: 320px;
 }
 /* 쪽지 창 등이 열려 있으면 모달 위로 올리되 왼쪽 아래로 옮겨 버튼을 가리지 않게 함 */
-body.modal-open .dl-panel { z-index: 12; right: auto; left: 16px; }
+body.modal-open .dl-panel,
+body.has-msg-wins .dl-panel { z-index: 60; right: auto; left: 16px; }
 .dl-item {
   background: #fff; border: 1px solid #d5dce6; border-radius: 12px;
   padding: 10px 26px 10px 14px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
@@ -774,3 +778,75 @@ body.dark .chip-me { background: #1e3b24; color: #81c784; }
 .picker .pk-user { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 14px; cursor: pointer; border-radius: 4px; }
 .picker .pk-user:hover { background: #eef4fd; }
 .picker .pk-user input { width: auto; }
+
+/* ===== 쪽지 창: 받은쪽지·보낸쪽지를 여러 개 동시에 띄움 ===== */
+/* 창들은 이 층 안에서만 서로 겹치고, 층 자체는 클릭을 그대로 통과시킨다 (창만 클릭됨) */
+#msgWinLayer { position: fixed; inset: 0; z-index: 30; pointer-events: none; }
+.msg-win {
+  position: absolute; pointer-events: auto;
+  display: flex; flex-direction: column;
+  min-width: 360px; min-height: 46px; max-height: calc(100vh - 90px);
+  background: #fff; border: 1px solid #b9c7d8; border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(15, 40, 80, .26);
+  resize: both; overflow: hidden;
+}
+.msg-win.mw-active { border-color: #1976d2; box-shadow: 0 14px 42px rgba(21, 101, 192, .34); }
+.mw-head {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  padding: 7px 8px 7px 14px; cursor: move; user-select: none;
+  background: linear-gradient(90deg, #e3f0fd, #f4f8fd); border-bottom: 1px solid #d5e2f1;
+}
+.msg-win.mw-sent .mw-head { background: linear-gradient(90deg, #e8f5e9, #f6fbf6); border-bottom-color: #cfe5d1; }
+.mw-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #1a3a5c; }
+.mw-time { font-size: 12px; color: #6b7a8c; flex-shrink: 0; }
+.mw-btn {
+  width: 28px; height: 26px; padding: 0; border: none; background: transparent;
+  border-radius: 6px; font-size: 13px; color: #556; flex-shrink: 0;
+}
+.mw-btn:hover { background: rgba(0, 0, 0, .08); }
+.mw-close:hover { background: #ffe9e9; color: #c62828; }
+.mw-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 16px 6px; }
+.mw-body .detail-body { min-height: 60px; }
+.mw-btns { flex-shrink: 0; margin: 0; padding: 10px 14px 12px; flex-wrap: wrap; border-top: 1px solid #eef1f6; }
+.mw-btns button { padding: 6px 12px; font-size: 13px; }
+/* 접기: 제목줄만 남김 (제목줄 두 번 클릭 또는 —) */
+.msg-win.mw-folded { resize: none; height: auto !important; min-height: 0; }
+.msg-win.mw-folded .mw-body, .msg-win.mw-folded .mw-btns { display: none; }
+.msg-win.mw-dragging { opacity: .9; }
+/* 이미 열린 쪽지를 다시 누르면 그 창이 깜빡임 */
+.msg-win.mw-flash { animation: mwFlash .6s ease-out 2; }
+@keyframes mwFlash { 50% { box-shadow: 0 0 0 4px rgba(30, 136, 229, .55), 0 14px 42px rgba(21, 101, 192, .34); } }
+body.dark .msg-win { background: #232932; border-color: #414b5a; color: #d5dae2; box-shadow: 0 12px 36px rgba(0, 0, 0, .55); }
+body.dark .msg-win.mw-active { border-color: #42a5f5; }
+body.dark .mw-head { background: linear-gradient(90deg, #1d3a5f, #232932); border-bottom-color: #333b47; }
+body.dark .msg-win.mw-sent .mw-head { background: linear-gradient(90deg, #1e3b24, #232932); }
+body.dark .mw-title { color: #d5dae2; }
+body.dark .mw-btn { color: #94a0af; }
+body.dark .mw-btns { border-top-color: #333b47; }
+
+/* 열린 쪽지 창이 2개 이상일 때: 아래 가운데 "열린 쪽지 N개 [접기] [모두 닫기]" */
+.msg-win-bar {
+  position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 31;
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px;
+  background: #1a3a5c; color: #fff; border-radius: 20px; font-size: 13px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
+}
+.msg-win-bar button { padding: 3px 12px; font-size: 12px; border-radius: 14px; border: none; }
+body.dark .msg-win-bar { background: #2a313c; }
+
+/* 쪽지 창을 띄운 채 쪽지를 쓰면 쓰기 창을 왼쪽으로 붙여 오른쪽 쪽지 창과 겹치지 않게 */
+body.compose-split #composeModal { justify-content: flex-start; padding-left: 16px; }
+body.compose-split #composeModal .modal { width: calc(100vw - var(--mw-space, 610px)); min-width: 480px; }
+
+/* 쪽지에서 만든 사용자 그룹 강조 */
+.group-item.group-new { border-color: #1976d2; box-shadow: 0 0 0 3px rgba(25, 118, 210, .25); transition: box-shadow .3s; }
+
+/* 설문 결과 엑셀 저장 */
+.poll-export-btn { font-weight: bold; color: #1b5e20; border-color: #a5d6a7; background: #f1f8f1; }
+.poll-export-btn:hover { background: #e3f2e4; }
+.poll-export-btn.poll-export-done { color: #1565c0; border-color: #90caf9; background: #eef6fe; }
+.poll-export-where { margin-top: 6px; font-size: 12px; color: #2e7d32; word-break: break-all; }
+.poll-export-where a { margin-left: 4px; }
+body.dark .poll-export-btn { color: #a5d6a7; border-color: #2e5b34; background: #1e3b24; }
+body.dark .poll-export-btn.poll-export-done { color: #90caf9; border-color: #2b578c; background: #1d3a5f; }
+body.dark .poll-export-where { color: #81c784; }

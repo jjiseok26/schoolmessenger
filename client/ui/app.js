@@ -334,6 +334,9 @@ function handleServer(m) {
       const msg = S.messages.find(x => x.id === m.messageId);
       if (msg && !msg.readBy.includes(m.readerId)) msg.readBy.push(m.readerId);
       renderAll();
+      // 열어 둔 보낸쪽지 창의 "읽은 사람" 도 바로 갱신
+      const w = S.msgWins.get(m.messageId);
+      if (w) w.refresh();
       break;
     }
     case 'presence': {
@@ -348,10 +351,7 @@ function handleServer(m) {
       // 회수한 본인 보관함에서도 제거
       if (m.messageId) {
         S.messages = S.messages.filter(x => x.id !== m.messageId);
-        if (S.openMsgId === m.messageId) {
-          S.openMsgId = null;
-          $('#detailModal').style.display = 'none';
-        }
+        closeMsgWin(m.messageId);
         renderAll();
       }
       if (m.readCount) alert(`쪽지를 회수했습니다.\n다만 ${m.readCount}명은 이미 읽은 뒤였습니다.`);
@@ -371,21 +371,17 @@ function handleServer(m) {
       break;
     case 'message_recalled': {
       // 보낸 사람이 회수함 — 읽은 뒤에도 회수될 수 있으므로 열어 둔 쪽지 창도 닫는다
-      const wasOpen = S.openMsgId === m.messageId;
+      const wasOpen = S.msgWins.has(m.messageId);
       S.messages = S.messages.filter(x => x.id !== m.messageId);
       renderAll();
       if (wasOpen) {
-        S.openMsgId = null;
-        $('#detailModal').style.display = 'none';
+        closeMsgWin(m.messageId);
         alert(`${m.from || '보낸 사람'} 님이 이 쪽지를 회수했습니다.`);
       }
       break;
     }
     case 'message_deleted':
-      if (S.openMsgId === m.messageId) {
-        S.openMsgId = null;
-        $('#detailModal').style.display = 'none';
-      }
+      closeMsgWin(m.messageId);
       S.messages = S.messages.filter(x => x.id !== m.messageId);
       renderAll();
       break;
@@ -399,12 +395,6 @@ function handleServer(m) {
       if (!S.roomMsgs[m.room.id]) S.roomMsgs[m.room.id] = m.history || [];
       if (m.room.creator !== S.me.id) notifyUser('👥 채팅방 초대', `'${m.room.name}' 채팅방에 초대되었습니다.`);
       renderRooms(); updateBadges();
-      // 쪽지에서 만든 채팅방은 만들자마자 그 방으로 이동
-      if (m.room.creator === S.me.id && S.openRoomAfterCreate) {
-        S.openRoomAfterCreate = false;
-        showTab('rooms');
-        openRoom(m.room.id);
-      }
       break;
     }
     case 'room_message': {
@@ -475,6 +465,18 @@ function handleServer(m) {
       const i = S.groups.findIndex(g => g.id === m.group.id);
       if (i >= 0) S.groups[i] = m.group; else S.groups.push(m.group);
       renderGroups();
+      // 쪽지에서 만든 그룹이면 왼쪽 [사용자 그룹] 탭을 열어 바로 보여 줌
+      if (S.showGroupsAfterSave && i < 0) {
+        S.showGroupsAfterSave = false;
+        showSideTab('groups');
+        const el = [...document.querySelectorAll('#groupList .group-item')]
+          .find(x => x.dataset.id === m.group.id);
+        if (el) {
+          el.scrollIntoView({ block: 'nearest' });
+          el.classList.add('group-new');
+          setTimeout(() => el.classList.remove('group-new'), 2500);
+        }
+      }
       break;
     }
     case 'group_deleted':
@@ -575,6 +577,7 @@ window.native?.onUpdateFailed?.(() => { S.updatePrompted = null; }); // 다음 �
 function backToLogin(msg) {
   disconnect();
   S.loggedIn = false;
+  closeAllMsgWins(); // 다른 사람이 로그인할 수 있으므로 열린 쪽지 창은 모두 닫음
   updateAppBadge(0);
   $('#mainView').style.display = 'none';
   $('#loginView').style.display = '';
@@ -1108,12 +1111,12 @@ function msgItem(m, mode) {
   btns.className = 'msg-actions';
   // 나에게 보낸 메모는 "대화" 상대가 없다
   const peerId = self ? null : (mode === 'inbox' ? m.from : m.to.find(id => id !== S.me.id));
-  // 여러 사람이 함께 받은 쪽지면 그 사람들로 바로 채팅방을 만들 수 있게
+  // 여러 사람이 함께 받은 쪽지면 그 사람들로 바로 사용자 그룹을 만들 수 있게
   const group = msgParticipants(m);
   btns.innerHTML = `
     ${mode === 'inbox' ? '<button data-a="reply" title="답장">↩ 답장</button>' : ''}
     ${peerId ? `<button data-a="chat" title="${esc(nameOf(peerId))} 님과 대화">💬</button>` : ''}
-    ${group.length >= 2 ? `<button data-a="room" title="이 쪽지를 주고받은 ${group.length}명과 채팅방 만들기">👥</button>` : ''}
+    ${group.length >= 2 ? `<button data-a="group" title="이 쪽지를 주고받은 ${group.length}명으로 사용자 그룹 만들기">👥</button>` : ''}
     <button data-a="fwd" title="전달">➦ 전달</button>
     <button data-a="del" class="danger-text" title="삭제">✕</button>`;
   btns.onclick = (e) => {
@@ -1122,7 +1125,7 @@ function msgItem(m, mode) {
     if (!b) return;
     if (b.dataset.a === 'reply') replyToMessage(m);
     if (b.dataset.a === 'chat') openChat(peerId);
-    if (b.dataset.a === 'room') roomFromMessage(m);
+    if (b.dataset.a === 'group') groupFromMessage(m);
     if (b.dataset.a === 'fwd') forwardMessage(m);
     if (b.dataset.a === 'del' && confirm('이 쪽지를 내 보관함에서 삭제할까요?\n(상대방 화면에는 그대로 남습니다)')) {
       send({ type: 'delete_message', messageId: m.id });
@@ -1290,6 +1293,13 @@ document.addEventListener('click', (e) => {
 function syncModalOpen() {
   const open = [...document.querySelectorAll('.modal-bg')].some(el => el.style.display === 'flex');
   document.body.classList.toggle('modal-open', open);
+  syncComposeSplit();
+}
+
+// 쪽지 창을 띄운 채 쪽지를 쓰면: 쓰기 창은 왼쪽, 쪽지 창은 오른쪽에 두어 서로 가리지 않게 한다
+function syncComposeSplit() {
+  const composing = $('#composeModal').style.display === 'flex';
+  document.body.classList.toggle('compose-split', composing && !!S.msgWins && S.msgWins.size > 0);
 }
 {
   const obs = new MutationObserver(syncModalOpen);
@@ -1427,8 +1437,10 @@ function renderRoomChat() {
       bubble.appendChild(box);
       const canClose = m.from === S.me.id || S.me.admin; // 만든 사람·관리자는 지금 마감 가능
       renderPoll(box, m.poll, (options) =>
-        send({ type: 'vote_room_poll', roomId: m.roomId, msgId: m.id, options }),
-        { onClose: canClose ? () => send({ type: 'close_poll', roomId: m.roomId, msgId: m.id }) : null });
+        send({ type: 'vote_room_poll', roomId: m.roomId, msgId: m.id, options }), {
+        onClose: canClose ? () => send({ type: 'close_poll', roomId: m.roomId, msgId: m.id }) : null,
+        exportQuery: 'roomId=' + encodeURIComponent(m.roomId) + '&msgId=' + encodeURIComponent(m.id)
+      });
       const t = document.createElement('span');
       t.className = 'btime';
       t.textContent = fmtTime(m.time);
@@ -1549,36 +1561,14 @@ function openRoomModal(mode, preset) {
   }
 }
 
-// ---------- 쪽지 → 채팅방 ----------
 // 쪽지를 주고받은 사람들 (보낸 사람 + 받는 사람, 나 제외)
 function msgParticipants(m) {
   return [...new Set([m.from, ...m.to])].filter(id => id !== S.me.id && userById(id));
 }
 
-function roomFromMessage(m) {
-  const members = msgParticipants(m);
-  if (!members.length) return alert('함께 대화할 사람이 없습니다.');
-  $('#detailModal').style.display = 'none';
-  // 똑같은 사람들로 된 채팅방이 이미 있으면 그 방으로 갈지 먼저 묻는다
-  const want = new Set([S.me.id, ...members]);
-  const same = S.rooms.find(r => r.members.length === want.size && r.members.every(id => want.has(id)));
-  if (same && confirm(`같은 사람들로 된 채팅방 '${same.name}'이(가) 이미 있습니다.\n그 방으로 갈까요?\n\n[취소]를 누르면 새 채팅방을 만듭니다.`)) {
-    showTab('rooms');
-    openRoom(same.id);
-    return;
-  }
-  const first = (m.text || '').trim().split(/\r?\n/)[0].trim().slice(0, 20);
-  const name = first ? `쪽지: ${first}` : `쪽지 대화 (${members.length + 1}명)`;
-  S.openRoomAfterCreate = true; // 만들어지면 바로 그 방으로 이동
-  openRoomModal('create', { members, name });
-}
-
 $('#roomCreateBtn').addEventListener('click', () => openRoomModal('create'));
 $('#roomInviteBtn').addEventListener('click', () => openRoomModal('invite'));
-$('#roomModalCancel').addEventListener('click', () => {
-  S.openRoomAfterCreate = false;
-  $('#roomModal').style.display = 'none';
-});
+$('#roomModalCancel').addEventListener('click', () => { $('#roomModal').style.display = 'none'; });
 $('#roomModalOk').addEventListener('click', () => {
   if (!S.roomPick.size) return $('#roomModalError').textContent = '대화 상대를 선택하세요.';
   if (S.roomModalMode === 'create') {
@@ -1699,14 +1689,20 @@ function renderNotices() {
 }
 
 // ---------- 사이드바 탭 (조직도 / 사용자 그룹) ----------
-$$('.side-tab').forEach(t => t.addEventListener('click', () => {
-  S.sideTab = t.dataset.side;
-  $$('.side-tab').forEach(x => x.classList.toggle('active', x === t));
-  $('#orgTree').style.display = S.sideTab === 'org' ? '' : 'none';
-  $('#groupPane').style.display = S.sideTab === 'groups' ? '' : 'none';
-  $('#searchInput').style.display = S.sideTab === 'org' ? '' : 'none';
-  if (S.sideTab === 'groups') renderGroups();
-}));
+// 왼쪽 [조직도 | 사용자 그룹] 탭 전환
+// (사용자 그룹 탭에서는 조직도용 검색창·접속 필터·전체 선택 바를 함께 숨김)
+function showSideTab(tab) {
+  S.sideTab = tab;
+  const org = tab === 'org';
+  $$('.side-tab').forEach(x => x.classList.toggle('active', x.dataset.side === tab));
+  $('#orgTree').style.display = org ? '' : 'none';
+  $('#groupPane').style.display = org ? 'none' : '';
+  $('#searchInput').closest('.search-wrap').style.display = org ? '' : 'none';
+  $('#presenceFilter').style.display = org ? '' : 'none';
+  $('#treeSelBar').style.display = org ? '' : 'none';
+  if (!org) renderGroups();
+}
+$$('.side-tab').forEach(t => t.addEventListener('click', () => showSideTab(t.dataset.side)));
 
 // ---------- 사용자 그룹 ----------
 function renderGroups() {
@@ -1722,6 +1718,7 @@ function renderGroups() {
     const closed = S.closedGroups.has(g.id);
     const el = document.createElement('div');
     el.className = 'group-item';
+    el.dataset.id = g.id;
     el.innerHTML = `
       <div class="g-head" title="클릭하면 접기/펼치기">${closed ? '▸' : '▾'} 👥 ${esc(g.name)} <span style="color:#99a;font-weight:normal">(${g.members.length}명)</span></div>
       <div class="g-member-list"></div>
@@ -1787,19 +1784,29 @@ function renderGroups() {
   }
 }
 
-function openGroupModal(g, presetIds) {
+// presetName: 쪽지에서 그룹을 만들 때 미리 채울 그룹 이름
+function openGroupModal(g, presetIds, presetName) {
   S.editingGroupId = g ? g.id : null;
   S.groupPick = new Set(g ? g.members : (presetIds || []).filter(id => id !== S.me.id));
-  $('#groupModalTitle').textContent = g ? '그룹 수정' : '그룹 만들기';
-  $('#groupNameInput').value = g ? g.name : '';
+  $('#groupModalTitle').textContent = g ? '그룹 수정'
+    : (presetName ? '👥 쪽지를 주고받은 사람들로 그룹 만들기' : '그룹 만들기');
+  $('#groupNameInput').value = g ? g.name : (presetName || '');
   $('#groupModalError').textContent = '';
-  buildPicker($('#groupPicker'), $('#groupChips'), S.groupPick);
+  // 구성원이 미리 채워져 있으면 검색창 대신 그룹 이름에 커서
+  buildPicker($('#groupPicker'), $('#groupChips'), S.groupPick, null, !presetName);
   $('#groupModal').style.display = 'flex';
-  $('#groupNameInput').focus();
+  setTimeout(() => {
+    const inp = $('#groupNameInput');
+    inp.focus();
+    inp.select(); // 미리 채운 이름은 바로 고쳐 쓸 수 있게 선택
+  }, 60);
 }
 
 $('#groupAddBtn').addEventListener('click', () => openGroupModal(null));
-$('#groupModalCancel').addEventListener('click', () => { $('#groupModal').style.display = 'none'; });
+$('#groupModalCancel').addEventListener('click', () => {
+  S.showGroupsAfterSave = false;
+  $('#groupModal').style.display = 'none';
+});
 $('#groupModalOk').addEventListener('click', () => {
   const name = $('#groupNameInput').value.trim();
   if (!name) return $('#groupModalError').textContent = '그룹 이름을 입력하세요.';
@@ -2036,88 +2043,237 @@ function openChat(peerId) {
   $('#chatText').focus();
 }
 
-// ---------- 쪽지 상세 ----------
+// ---------- 쪽지 창 (받은쪽지·보낸쪽지를 여러 개 동시에 띄움) ----------
+// 모달 하나를 돌려 쓰던 방식 대신, 쪽지마다 떠 있는 창을 따로 만든다.
+// - 끌어서 옮기기(제목줄), 접기(—), 크기 조절(오른쪽 아래 모서리), 클릭하면 맨 앞으로
+// - 쪽지 쓰기 창보다 위에 떠서, 쪽지를 보면서 답장·새 쪽지를 쓸 수 있다
+// - 같은 쪽지를 다시 열면 새 창 대신 열려 있던 창을 앞으로 가져온다
+S.msgWins = new Map();   // 쪽지 id → { el, m, mode, refresh }
+S.winZ = 1;              // 쪽지 창끼리의 겹침 순서 (창들은 #msgWinLayer 안에서만 겹침)
+
+function focusMsgWin(el) {
+  el.style.zIndex = ++S.winZ;
+  $$('.msg-win').forEach(w => w.classList.toggle('mw-active', w === el));
+}
+
+function closeMsgWin(id) {
+  const w = S.msgWins.get(id);
+  if (!w) return;
+  w.el.remove();
+  S.msgWins.delete(id);
+  syncMsgWinBar();
+}
+
+function closeAllMsgWins() {
+  for (const id of [...S.msgWins.keys()]) closeMsgWin(id);
+}
+
+// 창이 2개 이상이면 "열린 쪽지 N개 [접기] [모두 닫기]" 막대 표시
+function syncMsgWinBar() {
+  const n = S.msgWins.size;
+  $('#msgWinBar').style.display = n >= 2 ? '' : 'none';
+  $('#msgWinCount').textContent = `📨 열린 쪽지 ${n}개`;
+  // 모두 접혀 있으면 [펴기], 하나라도 펼쳐져 있으면 [접기]
+  const allFolded = n > 0 && [...S.msgWins.values()].every(w => w.el.classList.contains('mw-folded'));
+  $('#msgWinFoldAll').textContent = allFolded ? '펴기' : '접기';
+  document.body.classList.toggle('has-msg-wins', n > 0);
+  syncComposeSplit();
+}
+$('#msgWinCloseAll').addEventListener('click', closeAllMsgWins);
+$('#msgWinFoldAll').addEventListener('click', () => {
+  const all = [...S.msgWins.values()];
+  const fold = all.some(w => !w.el.classList.contains('mw-folded'));
+  all.forEach(w => w.el.classList.toggle('mw-folded', fold));
+  syncMsgWinBar();
+});
+
+// 쪽지 창 너비: 넓은 화면은 560px, 좁은 화면은 쓰기 창(최소 480px) 자리를 남기도록 줄임 (최소 360px)
+function msgWinWidth() {
+  return Math.max(360, Math.min(560, window.innerWidth - 540));
+}
+
+// 새 창 위치: 화면 오른쪽에 붙여 아래로 조금씩 비켜 쌓음 (앞서 연 창의 제목줄이 보이게)
+// 왼쪽으로는 비켜 나가지 않으므로, 쪽지를 쓸 때 왼쪽으로 비켜난 쓰기 창과 겹치지 않는다
+function placeMsgWin(el) {
+  const w = msgWinWidth();
+  const top = 70 + (S.msgWins.size % 7) * 34;
+  el.style.width = w + 'px';
+  el.style.left = Math.max(10, window.innerWidth - w - 24) + 'px';
+  el.style.top = top + 'px';
+  el.style.maxHeight = Math.max(160, window.innerHeight - top - 16) + 'px'; // 화면 아래로 넘치지 않게
+  // 쓰기 창이 비켜설 폭 (쪽지 창 너비 + 여백)
+  document.body.style.setProperty('--mw-space', (w + 50) + 'px');
+}
+
+// 제목줄을 잡고 끌어서 옮기기 (제목줄 일부는 항상 화면 안에 남김)
+function makeWinDraggable(el, handle) {
+  handle.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    const ox = el.offsetLeft, oy = el.offsetTop;
+    el.classList.add('mw-dragging');
+    const move = (ev) => {
+      const x = Math.min(window.innerWidth - 80, Math.max(80 - el.offsetWidth, ox + ev.clientX - sx));
+      const y = Math.min(window.innerHeight - 40, Math.max(0, oy + ev.clientY - sy));
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+    };
+    const up = () => {
+      el.classList.remove('mw-dragging');
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  handle.addEventListener('dblclick', (e) => {
+    if (e.target.closest('button')) return;
+    el.classList.toggle('mw-folded');
+    syncMsgWinBar();
+  });
+}
+
 function openDetail(m, mode) {
-  S.openNoticeId = null;
-  S.openMsgId = m.id; // 회수되면 열려 있는 창을 닫기 위해 기억
-  if (mode === 'inbox' && !m.readBy.includes(S.me.id)) {
+  if (mode === 'inbox' && m.to.includes(S.me.id) && !m.readBy.includes(S.me.id)) {
     send({ type: 'read', messageId: m.id });
     m.readBy.push(S.me.id);
     renderInbox(); updateBadges();
   }
-  $('#detailTitle').textContent = mode === 'inbox' ? '받은 쪽지' : '보낸 쪽지';
-  const toNames = m.to.map(nameOf).join(', ');
-  let meta = `보낸 사람: ${esc(nameOf(m.from))}<br>받는 사람: ${esc(toNames)}<br>시각: ${fmtFull(m.time)}`;
-  if (mode === 'sent') {
-    const readers = m.readBy.map(nameOf).join(', ') || '없음';
-    meta += `<br>읽은 사람 (${m.readBy.length}/${m.to.length}): ${esc(readers)}`;
+  // 이미 열려 있는 쪽지면 그 창을 앞으로
+  const exist = S.msgWins.get(m.id);
+  if (exist) {
+    exist.el.classList.remove('mw-folded');
+    focusMsgWin(exist.el);
+    exist.el.classList.remove('mw-flash');
+    void exist.el.offsetWidth; // 깜빡임 애니메이션 다시 시작
+    exist.el.classList.add('mw-flash');
+    return;
   }
-  $('#detailMeta').innerHTML = meta;
-  $('#detailBody').innerHTML = m.html
+
+  const self = isSelfNote(m);
+  const kindLabel = self ? '📝 나에게 보낸 메모' : (mode === 'inbox' ? '📩 받은 쪽지' : '📤 보낸 쪽지');
+  const who = self ? '' : (mode === 'inbox'
+    ? nameOf(m.from)
+    : m.to.map(nameOf).slice(0, 2).join(', ') + (m.to.length > 2 ? ` 외 ${m.to.length - 2}명` : ''));
+
+  const el = document.createElement('div');
+  el.className = 'msg-win' + (mode === 'sent' ? ' mw-sent' : '');
+  el.dataset.id = m.id;
+  el.innerHTML = `
+    <div class="mw-head">
+      <span class="mw-title"><b>${kindLabel}</b>${who ? ' — ' + esc(who) : ''}</span>
+      <span class="mw-time">${fmtTime(m.time)}</span>
+      <button type="button" class="mw-btn mw-fold" title="접기 / 펴기 (제목줄 두 번 클릭)">—</button>
+      <button type="button" class="mw-btn mw-close" title="닫기 (Esc)">✕</button>
+    </div>
+    <div class="mw-body">
+      <div class="meta mw-meta"></div>
+      <div class="detail-body mw-text"></div>
+      <div class="files mw-files"></div>
+    </div>
+    <div class="modal-btns mw-btns"></div>`;
+
+  const metaHtml = () => {
+    let meta = `보낸 사람: ${esc(nameOf(m.from))}<br>받는 사람: ${esc(m.to.map(nameOf).join(', '))}<br>시각: ${fmtFull(m.time)}`;
+    if (mode === 'sent') {
+      const readers = m.readBy.map(nameOf).join(', ') || '없음';
+      meta += `<br>읽은 사람 (${m.readBy.length}/${m.to.length}): ${esc(readers)}`;
+    }
+    return meta;
+  };
+  const refresh = () => { el.querySelector('.mw-meta').innerHTML = metaHtml(); };
+  refresh();
+  el.querySelector('.mw-text').innerHTML = m.html
     ? linkifyHtml(sanitizeHtml(m.html))
     : (m.text ? `<span style="${msgStyleCss(m)}">${linkify(m.text)}</span>` : '(내용 없음)');
-  $('#detailFiles').innerHTML = attachmentLinks(m);
-  $('#detailPoll').innerHTML = ''; // 앞서 본 공지의 설문이 남지 않도록
-  // 인쇄
-  $('#detailPrint').style.display = '';
-  $('#detailPrint').onclick = () => printMessage({
-    title: mode === 'inbox' ? '받은 쪽지' : '보낸 쪽지',
-    metaHtml: meta,
-    bodyHtml: $('#detailBody').innerHTML,
-    files: m.attachments.map(a => `${a.name} (${fmtSize(a.size)})`)
-  });
-  $('#detailReply').style.display = mode === 'inbox' ? '' : 'none';
-  // 공지 창에서 '공지 삭제' 로 바뀐 글자가 남지 않도록 매번 되돌림
-  $('#detailReply').textContent = '답장';
-  $('#detailReply').onclick = () => {
-    $('#detailModal').style.display = 'none';
-    replyToMessage(m);
+  el.querySelector('.mw-files').innerHTML = attachmentLinks(m);
+
+  // 버튼들 — 답장·전달·대화·그룹 만들기는 창을 닫지 않는다 (쪽지를 보면서 쓰도록)
+  const btnBox = el.querySelector('.mw-btns');
+  const addBtn = (label, cls, title, onClick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (cls) b.className = cls;
+    if (title) b.title = title;
+    b.onclick = onClick;
+    btnBox.appendChild(b);
+    return b;
   };
-  // 1:1 대화창으로 이동 (받은쪽지는 보낸이, 보낸쪽지는 첫 수신자 — 나에게 보낸 메모는 없음)
+  // 1:1 대화 (받은쪽지는 보낸이, 보낸쪽지는 첫 수신자 — 나에게 보낸 메모는 없음)
   const peer = mode === 'inbox'
     ? (m.from !== S.me.id ? m.from : null)
     : m.to.find(id => id !== S.me.id);
-  $('#detailChat').style.display = peer ? '' : 'none';
-  if (peer) {
-    $('#detailChat').textContent = `💬 ${nameOf(peer)} 님과 대화`;
-    $('#detailChat').onclick = () => {
-      $('#detailModal').style.display = 'none';
-      openChat(peer);
-    };
-  }
-  // 이 쪽지를 주고받은 사람들(2명 이상)로 채팅방 만들기
+  if (peer) addBtn(`💬 ${nameOf(peer)} 님과 대화`, '', '', () => openChat(peer));
+  // 이 쪽지를 주고받은 사람들(2명 이상)로 사용자 그룹 만들기
   const others = msgParticipants(m);
-  $('#detailRoom').style.display = others.length >= 2 ? '' : 'none';
-  $('#detailRoom').textContent = `👥 ${others.length}명과 채팅방 만들기`;
-  $('#detailRoom').onclick = () => roomFromMessage(m);
-  // 전달
-  $('#detailForward').style.display = '';
-  $('#detailForward').textContent = '전달';
-  $('#detailForward').onclick = () => {
-    $('#detailModal').style.display = 'none';
-    forwardMessage(m);
-  };
-  // 회수 (내가 보낸 쪽지는 상대가 이미 읽었어도 회수 가능)
-  $('#detailRecall').style.display = mode === 'sent' ? '' : 'none';
-  $('#detailRecall').onclick = () => {
-    const readers = m.readBy.map(nameOf).join(', ');
-    const warn = m.readBy.length
-      ? `이미 읽은 사람이 있습니다. (${readers})\n내용을 본 뒤일 수 있습니다.\n\n`
-      : '';
-    if (confirm(`${warn}이 쪽지를 회수할까요?\n받는 사람의 쪽지함에서 삭제됩니다.`)) {
-      send({ type: 'recall_message', messageId: m.id });
-      $('#detailModal').style.display = 'none';
-    }
-  };
-  // 삭제 (내 보관함에서만 삭제, 상대방에게는 유지)
-  $('#detailDelete').style.display = '';
-  $('#detailDelete').onclick = () => {
+  if (others.length >= 2) {
+    addBtn(`👥 ${others.length}명으로 그룹 만들기`, 'mw-group', '이 쪽지를 주고받은 사람들로 사용자 그룹 만들기',
+      () => groupFromMessage(m));
+  }
+  addBtn('🖨 인쇄', '', '', () => printMessage({
+    title: mode === 'inbox' ? '받은 쪽지' : '보낸 쪽지',
+    metaHtml: metaHtml(),
+    bodyHtml: el.querySelector('.mw-text').innerHTML,
+    files: m.attachments.map(a => `${a.name} (${fmtSize(a.size)})`)
+  }));
+  addBtn('삭제', 'danger-text', '내 보관함에서만 삭제', () => {
     if (confirm('이 쪽지를 내 보관함에서 삭제할까요?\n(상대방 화면에는 그대로 남습니다)')) {
       send({ type: 'delete_message', messageId: m.id });
-      $('#detailModal').style.display = 'none';
     }
-  };
-  $('#detailModal').style.display = 'flex';
+  });
+  if (mode === 'sent') {
+    // 회수 (내가 보낸 쪽지는 상대가 이미 읽었어도 회수 가능)
+    addBtn('회수', 'danger-text', '받는 사람 쪽지함에서도 지우기', () => {
+      const readers = m.readBy.map(nameOf).join(', ');
+      const warn = m.readBy.length
+        ? `이미 읽은 사람이 있습니다. (${readers})\n내용을 본 뒤일 수 있습니다.\n\n`
+        : '';
+      if (confirm(`${warn}이 쪽지를 회수할까요?\n받는 사람의 쪽지함에서 삭제됩니다.`)) {
+        send({ type: 'recall_message', messageId: m.id });
+      }
+    });
+  }
+  addBtn('전달', '', '', () => forwardMessage(m));
+  if (mode === 'inbox') addBtn('답장', 'primary', '', () => replyToMessage(m));
+  addBtn('닫기', '', '', () => closeMsgWin(m.id));
+
+  el.querySelector('.mw-close').onclick = () => closeMsgWin(m.id);
+  el.querySelector('.mw-fold').onclick = () => { el.classList.toggle('mw-folded'); syncMsgWinBar(); };
+  el.addEventListener('mousedown', () => focusMsgWin(el));
+  makeWinDraggable(el, el.querySelector('.mw-head'));
+
+  $('#msgWinLayer').appendChild(el);
+  placeMsgWin(el);
+  S.msgWins.set(m.id, { el, m, mode, refresh });
+  focusMsgWin(el);
+  syncMsgWinBar();
+}
+
+// Esc: 다른 창(모달)이 열려 있지 않으면 맨 앞 쪽지 창을 닫음
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !S.msgWins.size) return;
+  if ([...document.querySelectorAll('.modal-bg')].some(x => x.style.display === 'flex')) return;
+  const top = [...S.msgWins.values()].sort((a, b) => Number(b.el.style.zIndex) - Number(a.el.style.zIndex))[0];
+  if (top) closeMsgWin(top.m.id);
+});
+
+// ---------- 쪽지 → 사용자 그룹 ----------
+// 쪽지를 주고받은 사람들로 사용자 그룹을 만든다 (그룹 이름은 사람 이름으로 미리 채움, 고칠 수 있음)
+function groupFromMessage(m) {
+  const members = msgParticipants(m);
+  if (!members.length) return alert('그룹으로 묶을 사람이 없습니다.');
+  const want = new Set(members);
+  const same = S.groups.find(g => g.members.length === want.size && g.members.every(id => want.has(id)));
+  if (same && !confirm(`같은 사람들로 된 사용자 그룹 '${same.name}'이(가) 이미 있습니다.\n그래도 새로 만들까요?\n\n[취소]를 누르면 사용자 그룹 목록을 보여 줍니다.`)) {
+    showSideTab('groups');
+    return;
+  }
+  const names = members.map(nameOf);
+  const name = names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} 외 ${names.length - 2}명`;
+  S.showGroupsAfterSave = true; // 저장되면 사용자 그룹 탭으로 이동
+  openGroupModal(null, members, name);
 }
 
 // ---------- 설문조사 (공지 / 채팅방 공용) ----------
@@ -2126,7 +2282,7 @@ function openDetail(m, mode) {
 //     counts[] / voters[][] — 마감된 뒤에만 옴 (voters는 투표자 공개 설문일 때만) }
 let pollSeq = 0;
 
-function pollHtml(p, name, canClose) {
+function pollHtml(p, name, canClose, canExport) {
   const closed = !!p.closed || Date.now() >= p.deadline;
   const hasResult = Array.isArray(p.counts); // 서버는 마감 후에만 결과를 보내 줌
   const mine = p.mine || [];
@@ -2169,6 +2325,9 @@ function pollHtml(p, name, canClose) {
     if (mine.length) html += '<button class="poll-cancel-btn">투표 취소</button>';
     if (canClose) html += '<button class="poll-close-btn" title="지금 마감하고 결과를 공개합니다">⏹ 지금 마감</button>';
     html += '</div>';
+  } else if (hasResult && canExport) {
+    // 마감 후: 결과를 엑셀 파일(.xlsx)로 저장 (첨부 저장 폴더에 저장, 저장 후에는 [열기])
+    html += `<div class="poll-btns"><button class="poll-export-btn" title="설문 결과를 엑셀 파일로 저장합니다">📥 결과 엑셀로 저장</button></div>`;
   }
   html += '</div>';
   return html;
@@ -2176,9 +2335,12 @@ function pollHtml(p, name, canClose) {
 
 // 설문을 container에 그리고 버튼을 연결
 //   onVote(선택한 항목 번호 배열) / opt.onClose: 있으면 [지금 마감] 버튼 표시 (만든 사람·관리자)
+//   opt.exportQuery: 'noticeId=…' 또는 'roomId=…&msgId=…' — 마감 후 [결과 엑셀로 저장]
 function renderPoll(container, poll, onVote, opt = {}) {
   const name = 'pollVote' + (++pollSeq);
-  container.innerHTML = pollHtml(poll, name, !!opt.onClose);
+  container.innerHTML = pollHtml(poll, name, !!opt.onClose, !!opt.exportQuery);
+  const exp = container.querySelector('.poll-export-btn');
+  if (exp) exp.onclick = () => exportPollExcel(exp, opt.exportQuery);
   const btn = container.querySelector('.poll-vote-btn');
   if (btn) btn.onclick = () => {
     const sel = [...container.querySelectorAll(`input[name="${name}"]:checked`)].map(el => Number(el.value));
@@ -2202,6 +2364,42 @@ function renderPoll(container, poll, onVote, opt = {}) {
   }
 }
 
+// 설문 결과를 엑셀로 저장 — 서버가 만들어 준 .xlsx 를 받아 첨부파일 저장 폴더에 저장한다.
+// 저장이 끝나면 버튼이 [저장한 엑셀 열기] 로 바뀌고, 아래에 저장 위치와 [폴더 열기] 가 표시된다.
+async function exportPollExcel(btn, query) {
+  if (btn.dataset.path) return window.native.openFile(btn.dataset.path);
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ 엑셀 만드는 중…';
+  try {
+    const url = httpBase() + '/poll-export?token=' + encodeURIComponent(S.token) + '&' + query;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error((await res.text()) || ('서버 오류 ' + res.status));
+    const cd = res.headers.get('content-disposition') || '';
+    const mt = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    const name = mt ? decodeURIComponent(mt[1]) : '설문결과.xlsx';
+    const data = new Uint8Array(await res.arrayBuffer());
+    const p = await window.native.saveFile(name, data);
+    btn.dataset.path = p;
+    btn.textContent = '📂 저장한 엑셀 열기';
+    btn.title = p;
+    btn.classList.add('poll-export-done');
+    const where = document.createElement('div');
+    where.className = 'poll-export-where';
+    where.innerHTML = `✅ 저장했습니다: <span class="pe-path"></span> <a href="#">폴더 열기</a>`;
+    where.querySelector('.pe-path').textContent = p;
+    where.querySelector('a').onclick = (e) => { e.preventDefault(); window.native.showInFolder(p); };
+    btn.closest('.poll-btns').after(where);
+  } catch (err) {
+    const msg = String((err && err.message) || err)
+      .replace(/^Error invoking remote method '[^']*':\s*/, '').replace(/^Error:\s*/, '');
+    alert('설문 결과를 엑셀로 저장하지 못했습니다.\n' + msg);
+    btn.textContent = label;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // 쪽지/공지 인쇄: 인쇄 영역에 내용을 채우고 시스템 인쇄 대화상자 호출
 function printMessage({ title, metaHtml, bodyHtml, files }) {
   $('#printArea').innerHTML = `
@@ -2215,7 +2413,6 @@ function printMessage({ title, metaHtml, bodyHtml, files }) {
 
 function openNoticeDetail(n) {
   S.openNoticeId = n.id;
-  S.openMsgId = null;
   $('#detailTitle').textContent = '📢 ' + n.title;
   let meta = `작성자: ${esc(n.authorName)}<br>시각: ${fmtFull(n.time)}`;
   if (n.edited) meta += `<br><span style="color:#e67e22">✏ 수정됨: ${fmtFull(n.edited)}${n.editedBy ? ' (' + esc(n.editedBy) + ')' : ''}</span>`;
@@ -2235,13 +2432,11 @@ function openNoticeDetail(n) {
   pollBox.innerHTML = '';
   if (n.poll) {
     const canClose = S.me.admin || n.authorId === S.me.id; // 작성자·관리자는 지금 마감 가능
-    renderPoll(pollBox, n.poll, (options) => send({ type: 'vote_poll', noticeId: n.id, options }),
-      { onClose: canClose ? () => send({ type: 'close_poll', noticeId: n.id }) : null });
+    renderPoll(pollBox, n.poll, (options) => send({ type: 'vote_poll', noticeId: n.id, options }), {
+      onClose: canClose ? () => send({ type: 'close_poll', noticeId: n.id }) : null,
+      exportQuery: 'noticeId=' + encodeURIComponent(n.id)   // 마감 후 [엑셀로 저장]
+    });
   }
-  $('#detailRecall').style.display = 'none';
-  $('#detailDelete').style.display = 'none';
-  $('#detailChat').style.display = 'none';
-  $('#detailRoom').style.display = 'none';
   // 작성자 본인 또는 관리자는 수정·삭제 가능
   const canEdit = S.me.admin || n.authorId === S.me.id;
   $('#detailForward').style.display = canEdit ? '' : 'none';
@@ -2477,6 +2672,14 @@ function clearDraft() {
 }
 
 function openCompose(preset, prefillText, carryAttachments, prefillHtml) {
+  // 쪽지를 쓰는 중에 떠 있는 쪽지 창의 [답장]·[전달] 을 누른 경우: 쓰던 내용을 그냥 지우지 않는다
+  if ($('#composeModal').style.display === 'flex') {
+    const busy = $('#composeText').innerText.trim() || (S.composeFileList || []).length;
+    if (busy && !confirm('작성 중인 쪽지가 있습니다.\n쓰던 내용을 닫고 새로 쓸까요?\n\n[취소]를 누르면 쓰던 쪽지로 돌아갑니다.')) {
+      focusComposeBody();
+      return;
+    }
+  }
   S.recipients = new Set(preset || []);
   S.composeCarry = carryAttachments || [];
   S.composeFileList = [];

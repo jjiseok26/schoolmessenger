@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('native', {
   openFile: (p) => ipcRenderer.send('open-file', p),
   saveAttachment: (url) => ipcRenderer.invoke('save-attachment', url),
   fileExists: (p) => ipcRenderer.invoke('file-exists', p),
+  saveFile: (name, data) => ipcRenderer.invoke('save-file', name, data),
   setBadge: (count, dataUrl, trayUrl) => ipcRenderer.send('set-badge', count, dataUrl, trayUrl),
   getDownloadDir: () => ipcRenderer.invoke('get-download-dir'),
   chooseDownloadDir: () => ipcRenderer.invoke('choose-download-dir'),
