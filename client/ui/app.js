@@ -90,7 +90,7 @@ const S = {
   rooms: [], roomMsgs: {}, currentRoom: null,
   scheduled: [], schedNotices: [], groups: [],
   sideTab: 'org', groupPick: new Set(), editingGroupId: null,
-  adminEditId: null, openNoticeId: null, openMsgId: null, deptOrder: [],
+  adminEditId: null, deptOrder: [],
   userOrder: {}, deptFlat: [], deptDisplayed: {},
   extraDepts: [], derivedDepts: new Set(),
   treeSel: new Set(), treeVisible: [],
@@ -444,13 +444,16 @@ function handleServer(m) {
       break;
     case 'notice_deleted':
       S.notices = S.notices.filter(n => n.id !== m.noticeId);
+      closeMsgWin(noticeWinKey(m.noticeId)); // 열어 둔 공지 창도 닫음
       renderNotices(); updateBadges();
       break;
     case 'notice_updated': {
       const i = S.notices.findIndex(n => n.id === m.notice.id);
       if (i >= 0) S.notices[i] = m.notice;
       renderNotices();
-      if (S.openNoticeId === m.notice.id) openNoticeDetail(m.notice); // 열려 있으면 설문 결과 실시간 갱신
+      // 열려 있는 공지 창은 제자리에서 내용·설문 결과만 다시 그림
+      const w = S.msgWins.get(noticeWinKey(m.notice.id));
+      if (w) w.refresh(m.notice);
       break;
     }
     case 'notice_scheduled':
@@ -1296,11 +1299,20 @@ function syncModalOpen() {
   syncComposeSplit();
 }
 
-// 쪽지 창을 띄운 채 쪽지를 쓰면: 쓰기 창은 왼쪽, 쪽지 창은 오른쪽에 두어 서로 가리지 않게 한다
+// 쪽지·공지 창을 띄운 채 쪽지를 쓰면: 쓰기 창은 왼쪽 절반, 떠 있는 창들은 오른쪽에 붙여 서로 가리지 않게 한다.
+// (쓰는 동안만 CSS 로 자리를 옮기고, 쓰기 창을 닫으면 창들은 원래 크기·위치로 돌아감)
 function syncComposeSplit() {
   const composing = $('#composeModal').style.display === 'flex';
-  document.body.classList.toggle('compose-split', composing && !!S.msgWins && S.msgWins.size > 0);
+  const on = composing && !!S.msgWins && S.msgWins.size > 0;
+  document.body.classList.toggle('compose-split', on);
+  if (!on) return;
+  const vw = window.innerWidth;
+  const cw = Math.max(480, Math.min(940, Math.round(vw * 0.52))); // 쓰기 창 너비
+  const sw = Math.max(320, vw - cw - 44);                         // 오른쪽 창 너비 (여백 포함)
+  document.body.style.setProperty('--cw', cw + 'px');
+  document.body.style.setProperty('--sw', sw + 'px');
 }
+window.addEventListener('resize', syncComposeSplit);
 {
   const obs = new MutationObserver(syncModalOpen);
   document.querySelectorAll('.modal-bg').forEach(el =>
@@ -2043,36 +2055,98 @@ function openChat(peerId) {
   $('#chatText').focus();
 }
 
-// ---------- 쪽지 창 (받은쪽지·보낸쪽지를 여러 개 동시에 띄움) ----------
-// 모달 하나를 돌려 쓰던 방식 대신, 쪽지마다 떠 있는 창을 따로 만든다.
+// ---------- 떠 있는 창 (받은쪽지·보낸쪽지·공지를 여러 개 동시에 띄움) ----------
+// 모달 하나를 돌려 쓰던 방식 대신, 쪽지·공지마다 떠 있는 창을 따로 만든다.
+// - 쪽지 쓰기 창만큼 크게 열림 (너비 최대 1100px), 화면 가운데에서 대각선으로 조금씩 비켜 쌓임
 // - 끌어서 옮기기(제목줄), 접기(—), 크기 조절(오른쪽 아래 모서리), 클릭하면 맨 앞으로
-// - 쪽지 쓰기 창보다 위에 떠서, 쪽지를 보면서 답장·새 쪽지를 쓸 수 있다
-// - 같은 쪽지를 다시 열면 새 창 대신 열려 있던 창을 앞으로 가져온다
-S.msgWins = new Map();   // 쪽지 id → { el, m, mode, refresh }
-S.winZ = 1;              // 쪽지 창끼리의 겹침 순서 (창들은 #msgWinLayer 안에서만 겹침)
+// - 쪽지 쓰기 창보다 위에 뜨고, 쓰는 동안에는 오른쪽으로 비켜 서서 보면서 쓸 수 있다
+// - 같은 쪽지·공지를 다시 열면 새 창 대신 열려 있던 창을 앞으로 가져온다
+S.msgWins = new Map();   // 창 키(쪽지 id 또는 'notice:'+공지 id) → { key, el, refresh }
+S.winZ = 1;              // 창끼리의 겹침 순서 (창들은 #msgWinLayer 안에서만 겹침)
+const noticeWinKey = (id) => 'notice:' + id;
 
 function focusMsgWin(el) {
   el.style.zIndex = ++S.winZ;
   $$('.msg-win').forEach(w => w.classList.toggle('mw-active', w === el));
 }
 
-function closeMsgWin(id) {
-  const w = S.msgWins.get(id);
+function closeMsgWin(key) {
+  const w = S.msgWins.get(key);
   if (!w) return;
   w.el.remove();
-  S.msgWins.delete(id);
+  S.msgWins.delete(key);
   syncMsgWinBar();
 }
 
 function closeAllMsgWins() {
-  for (const id of [...S.msgWins.keys()]) closeMsgWin(id);
+  for (const key of [...S.msgWins.keys()]) closeMsgWin(key);
 }
 
-// 창이 2개 이상이면 "열린 쪽지 N개 [접기] [모두 닫기]" 막대 표시
+// 이미 열린 창이면 접힌 것을 펴서 맨 앞으로 + 깜빡임. 있었으면 true
+function raiseMsgWin(key) {
+  const w = S.msgWins.get(key);
+  if (!w) return false;
+  w.el.classList.remove('mw-folded');
+  focusMsgWin(w.el);
+  w.el.classList.remove('mw-flash');
+  void w.el.offsetWidth; // 깜빡임 애니메이션 다시 시작
+  w.el.classList.add('mw-flash');
+  syncMsgWinBar();
+  return true;
+}
+
+// 창 뼈대 만들기: 제목줄(제목·시각·접기·닫기) + 본문 + 버튼 줄
+function createMsgWin(key, cls) {
+  const el = document.createElement('div');
+  el.className = 'msg-win' + (cls ? ' ' + cls : '');
+  el.dataset.id = key;
+  el.innerHTML = `
+    <div class="mw-head">
+      <span class="mw-title"></span>
+      <span class="mw-time"></span>
+      <button type="button" class="mw-btn mw-fold" title="접기 / 펴기 (제목줄 두 번 클릭)">—</button>
+      <button type="button" class="mw-btn mw-close" title="닫기 (Esc)">✕</button>
+    </div>
+    <div class="mw-body">
+      <div class="meta mw-meta"></div>
+      <div class="detail-body mw-text"></div>
+      <div class="files mw-files"></div>
+      <div class="mw-poll"></div>
+    </div>
+    <div class="modal-btns mw-btns"></div>`;
+  el.querySelector('.mw-close').onclick = () => closeMsgWin(key);
+  el.querySelector('.mw-fold').onclick = () => { el.classList.toggle('mw-folded'); syncMsgWinBar(); };
+  el.addEventListener('mousedown', () => focusMsgWin(el));
+  makeWinDraggable(el, el.querySelector('.mw-head'));
+  return el;
+}
+
+// 버튼 줄에 버튼 하나 추가
+function addWinBtn(el, label, cls, title, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  if (cls) b.className = cls;
+  if (title) b.title = title;
+  b.onclick = onClick;
+  el.querySelector('.mw-btns').appendChild(b);
+  return b;
+}
+
+// 만든 창을 화면에 띄우고 목록에 등록
+function showMsgWin(key, el, refresh) {
+  $('#msgWinLayer').appendChild(el);
+  placeMsgWin(el);
+  S.msgWins.set(key, { key, el, refresh });
+  focusMsgWin(el);
+  syncMsgWinBar();
+}
+
+// 창이 2개 이상이면 "열린 창 N개 [접기] [모두 닫기]" 막대 표시
 function syncMsgWinBar() {
   const n = S.msgWins.size;
   $('#msgWinBar').style.display = n >= 2 ? '' : 'none';
-  $('#msgWinCount').textContent = `📨 열린 쪽지 ${n}개`;
+  $('#msgWinCount').textContent = `📨 열린 창 ${n}개`;
   // 모두 접혀 있으면 [펴기], 하나라도 펼쳐져 있으면 [접기]
   const allFolded = n > 0 && [...S.msgWins.values()].every(w => w.el.classList.contains('mw-folded'));
   $('#msgWinFoldAll').textContent = allFolded ? '펴기' : '접기';
@@ -2087,22 +2161,19 @@ $('#msgWinFoldAll').addEventListener('click', () => {
   syncMsgWinBar();
 });
 
-// 쪽지 창 너비: 넓은 화면은 560px, 좁은 화면은 쓰기 창(최소 480px) 자리를 남기도록 줄임 (최소 360px)
-function msgWinWidth() {
-  return Math.max(360, Math.min(560, window.innerWidth - 540));
-}
-
-// 새 창 위치: 화면 오른쪽에 붙여 아래로 조금씩 비켜 쌓음 (앞서 연 창의 제목줄이 보이게)
-// 왼쪽으로는 비켜 나가지 않으므로, 쪽지를 쓸 때 왼쪽으로 비켜난 쓰기 창과 겹치지 않는다
+// 새 창 크기·위치: 쪽지 쓰기 창만큼 크게 (너비 최대 1100px, 높이 최대 720px),
+// 화면 가운데에서 대각선으로 30px씩 비켜 쌓아 앞서 연 창의 제목줄이 보이게 한다
 function placeMsgWin(el) {
-  const w = msgWinWidth();
-  const top = 70 + (S.msgWins.size % 7) * 34;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const w = Math.max(360, Math.min(1100, vw - 60));
+  const k = S.msgWins.size % 6, step = 30;
+  const left0 = Math.max(10, Math.round((vw - w) / 2) - 2 * step);
+  const left = Math.max(10, Math.min(vw - w - 10, left0 + k * step));
+  const top = 60 + k * step;
   el.style.width = w + 'px';
-  el.style.left = Math.max(10, window.innerWidth - w - 24) + 'px';
+  el.style.left = left + 'px';
   el.style.top = top + 'px';
-  el.style.maxHeight = Math.max(160, window.innerHeight - top - 16) + 'px'; // 화면 아래로 넘치지 않게
-  // 쓰기 창이 비켜설 폭 (쪽지 창 너비 + 여백)
-  document.body.style.setProperty('--mw-space', (w + 50) + 'px');
+  el.style.height = Math.max(240, Math.min(720, vh - top - 20)) + 'px';
 }
 
 // 제목줄을 잡고 끌어서 옮기기 (제목줄 일부는 항상 화면 안에 남김)
@@ -2134,22 +2205,14 @@ function makeWinDraggable(el, handle) {
   });
 }
 
+// 받은쪽지·보낸쪽지 창 열기
 function openDetail(m, mode) {
   if (mode === 'inbox' && m.to.includes(S.me.id) && !m.readBy.includes(S.me.id)) {
     send({ type: 'read', messageId: m.id });
     m.readBy.push(S.me.id);
     renderInbox(); updateBadges();
   }
-  // 이미 열려 있는 쪽지면 그 창을 앞으로
-  const exist = S.msgWins.get(m.id);
-  if (exist) {
-    exist.el.classList.remove('mw-folded');
-    focusMsgWin(exist.el);
-    exist.el.classList.remove('mw-flash');
-    void exist.el.offsetWidth; // 깜빡임 애니메이션 다시 시작
-    exist.el.classList.add('mw-flash');
-    return;
-  }
+  if (raiseMsgWin(m.id)) return; // 이미 열려 있는 쪽지면 그 창을 앞으로
 
   const self = isSelfNote(m);
   const kindLabel = self ? '📝 나에게 보낸 메모' : (mode === 'inbox' ? '📩 받은 쪽지' : '📤 보낸 쪽지');
@@ -2157,22 +2220,9 @@ function openDetail(m, mode) {
     ? nameOf(m.from)
     : m.to.map(nameOf).slice(0, 2).join(', ') + (m.to.length > 2 ? ` 외 ${m.to.length - 2}명` : ''));
 
-  const el = document.createElement('div');
-  el.className = 'msg-win' + (mode === 'sent' ? ' mw-sent' : '');
-  el.dataset.id = m.id;
-  el.innerHTML = `
-    <div class="mw-head">
-      <span class="mw-title"><b>${kindLabel}</b>${who ? ' — ' + esc(who) : ''}</span>
-      <span class="mw-time">${fmtTime(m.time)}</span>
-      <button type="button" class="mw-btn mw-fold" title="접기 / 펴기 (제목줄 두 번 클릭)">—</button>
-      <button type="button" class="mw-btn mw-close" title="닫기 (Esc)">✕</button>
-    </div>
-    <div class="mw-body">
-      <div class="meta mw-meta"></div>
-      <div class="detail-body mw-text"></div>
-      <div class="files mw-files"></div>
-    </div>
-    <div class="modal-btns mw-btns"></div>`;
+  const el = createMsgWin(m.id, mode === 'sent' ? 'mw-sent' : '');
+  el.querySelector('.mw-title').innerHTML = `<b>${kindLabel}</b>${who ? ' — ' + esc(who) : ''}`;
+  el.querySelector('.mw-time').textContent = fmtTime(m.time);
 
   const metaHtml = () => {
     let meta = `보낸 사람: ${esc(nameOf(m.from))}<br>받는 사람: ${esc(m.to.map(nameOf).join(', '))}<br>시각: ${fmtFull(m.time)}`;
@@ -2190,17 +2240,7 @@ function openDetail(m, mode) {
   el.querySelector('.mw-files').innerHTML = attachmentLinks(m);
 
   // 버튼들 — 답장·전달·대화·그룹 만들기는 창을 닫지 않는다 (쪽지를 보면서 쓰도록)
-  const btnBox = el.querySelector('.mw-btns');
-  const addBtn = (label, cls, title, onClick) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = label;
-    if (cls) b.className = cls;
-    if (title) b.title = title;
-    b.onclick = onClick;
-    btnBox.appendChild(b);
-    return b;
-  };
+  const addBtn = (label, cls, title, onClick) => addWinBtn(el, label, cls, title, onClick);
   // 1:1 대화 (받은쪽지는 보낸이, 보낸쪽지는 첫 수신자 — 나에게 보낸 메모는 없음)
   const peer = mode === 'inbox'
     ? (m.from !== S.me.id ? m.from : null)
@@ -2239,24 +2279,61 @@ function openDetail(m, mode) {
   if (mode === 'inbox') addBtn('답장', 'primary', '', () => replyToMessage(m));
   addBtn('닫기', '', '', () => closeMsgWin(m.id));
 
-  el.querySelector('.mw-close').onclick = () => closeMsgWin(m.id);
-  el.querySelector('.mw-fold').onclick = () => { el.classList.toggle('mw-folded'); syncMsgWinBar(); };
-  el.addEventListener('mousedown', () => focusMsgWin(el));
-  makeWinDraggable(el, el.querySelector('.mw-head'));
-
-  $('#msgWinLayer').appendChild(el);
-  placeMsgWin(el);
-  S.msgWins.set(m.id, { el, m, mode, refresh });
-  focusMsgWin(el);
-  syncMsgWinBar();
+  showMsgWin(m.id, el, refresh);
 }
 
-// Esc: 다른 창(모달)이 열려 있지 않으면 맨 앞 쪽지 창을 닫음
+// 공지 창 열기 (공지도 쪽지처럼 여러 개를 동시에 띄움). 설문이 바뀌면 refresh(새 공지)로 다시 그림
+function openNoticeDetail(n) {
+  const key = noticeWinKey(n.id);
+  const exist = S.msgWins.get(key);
+  if (exist) { exist.refresh(n); raiseMsgWin(key); return; }
+
+  const el = createMsgWin(key, 'mw-notice');
+  const render = (nn) => {
+    el.querySelector('.mw-title').innerHTML = `<b>📢 공지</b> — ${esc(nn.title)}`;
+    el.querySelector('.mw-time').textContent = fmtTime(nn.time);
+    let meta = `작성자: ${esc(nn.authorName)}<br>시각: ${fmtFull(nn.time)}`;
+    if (nn.edited) meta += `<br><span style="color:#e67e22">✏ 수정됨: ${fmtFull(nn.edited)}${nn.editedBy ? ' (' + esc(nn.editedBy) + ')' : ''}</span>`;
+    el.querySelector('.mw-meta').innerHTML = meta;
+    el.querySelector('.mw-text').innerHTML = nn.body ? linkify(nn.body) : '(내용 없음)';
+    el.querySelector('.mw-files').innerHTML =
+      (nn.attachments || []).length ? attachmentLinks({ attachments: nn.attachments }) : '';
+    // 설문 (작성자·관리자는 지금 마감, 마감 후 누구나 엑셀로 저장)
+    const pollBox = el.querySelector('.mw-poll');
+    pollBox.innerHTML = '';
+    if (nn.poll) {
+      const canClose = S.me.admin || nn.authorId === S.me.id;
+      renderPoll(pollBox, nn.poll, (options) => send({ type: 'vote_poll', noticeId: nn.id, options }), {
+        onClose: canClose ? () => send({ type: 'close_poll', noticeId: nn.id }) : null,
+        exportQuery: 'noticeId=' + encodeURIComponent(nn.id)
+      });
+    }
+    // 버튼: 인쇄 / (작성자·관리자) 수정·삭제 / 닫기
+    el.querySelector('.mw-btns').innerHTML = '';
+    addWinBtn(el, '🖨 인쇄', '', '', () => printMessage({
+      title: '공지사항 — ' + nn.title,
+      metaHtml: meta,
+      bodyHtml: nn.body ? linkify(nn.body) : '(내용 없음)',
+      files: (nn.attachments || []).map(a => `${a.name} (${fmtSize(a.size)})`)
+    }));
+    if (S.me.admin || nn.authorId === S.me.id) {
+      addWinBtn(el, '✏ 수정', '', '공지 내용 고치기', () => openNoticeModal(false, nn));
+      addWinBtn(el, '공지 삭제', 'danger-text', '', () => {
+        if (confirm('이 공지를 삭제할까요?')) send({ type: 'delete_notice', noticeId: nn.id });
+      });
+    }
+    addWinBtn(el, '닫기', '', '', () => closeMsgWin(key));
+  };
+  render(n);
+  showMsgWin(key, el, render);
+}
+
+// Esc: 다른 창(모달)이 열려 있지 않으면 맨 앞 창을 닫음
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !S.msgWins.size) return;
   if ([...document.querySelectorAll('.modal-bg')].some(x => x.style.display === 'flex')) return;
   const top = [...S.msgWins.values()].sort((a, b) => Number(b.el.style.zIndex) - Number(a.el.style.zIndex))[0];
-  if (top) closeMsgWin(top.m.id);
+  if (top) closeMsgWin(top.key);
 });
 
 // ---------- 쪽지 → 사용자 그룹 ----------
@@ -2410,57 +2487,6 @@ function printMessage({ title, metaHtml, bodyHtml, files }) {
     ${files && files.length ? `<hr><div class="pr-files">첨부파일: ${files.map(esc).join(', ')}</div>` : ''}`;
   window.print();
 }
-
-function openNoticeDetail(n) {
-  S.openNoticeId = n.id;
-  $('#detailTitle').textContent = '📢 ' + n.title;
-  let meta = `작성자: ${esc(n.authorName)}<br>시각: ${fmtFull(n.time)}`;
-  if (n.edited) meta += `<br><span style="color:#e67e22">✏ 수정됨: ${fmtFull(n.edited)}${n.editedBy ? ' (' + esc(n.editedBy) + ')' : ''}</span>`;
-  $('#detailMeta').innerHTML = meta;
-  $('#detailPrint').style.display = '';
-  $('#detailPrint').onclick = () => printMessage({
-    title: '공지사항 — ' + n.title,
-    metaHtml: meta,
-    bodyHtml: n.body ? linkify(n.body) : '(내용 없음)',
-    files: (n.attachments || []).map(a => `${a.name} (${fmtSize(a.size)})`)
-  });
-  $('#detailBody').innerHTML = n.body ? linkify(n.body) : '(내용 없음)';
-  // 첨부파일 + 설문
-  $('#detailFiles').innerHTML =
-    (n.attachments || []).length ? attachmentLinks({ attachments: n.attachments }) : '';
-  const pollBox = $('#detailPoll');
-  pollBox.innerHTML = '';
-  if (n.poll) {
-    const canClose = S.me.admin || n.authorId === S.me.id; // 작성자·관리자는 지금 마감 가능
-    renderPoll(pollBox, n.poll, (options) => send({ type: 'vote_poll', noticeId: n.id, options }), {
-      onClose: canClose ? () => send({ type: 'close_poll', noticeId: n.id }) : null,
-      exportQuery: 'noticeId=' + encodeURIComponent(n.id)   // 마감 후 [엑셀로 저장]
-    });
-  }
-  // 작성자 본인 또는 관리자는 수정·삭제 가능
-  const canEdit = S.me.admin || n.authorId === S.me.id;
-  $('#detailForward').style.display = canEdit ? '' : 'none';
-  $('#detailForward').textContent = '✏ 수정';
-  $('#detailForward').onclick = () => {
-    $('#detailModal').style.display = 'none';
-    openNoticeModal(false, n);
-  };
-  $('#detailReply').style.display = canEdit ? '' : 'none';
-  $('#detailReply').textContent = canEdit ? '공지 삭제' : '답장';
-  $('#detailReply').onclick = () => {
-    if (confirm('이 공지를 삭제할까요?')) {
-      send({ type: 'delete_notice', noticeId: n.id });
-      $('#detailModal').style.display = 'none';
-    }
-  };
-  $('#detailModal').style.display = 'flex';
-}
-
-$('#detailClose').addEventListener('click', () => {
-  $('#detailModal').style.display = 'none';
-  $('#detailReply').textContent = '답장';
-  S.openNoticeId = null;
-});
 
 // ---------- 쪽지 작성 ----------
 // ---- 쪽지 리치 편집기 (글꼴/크기/굵게/밑줄/색/정렬/이미지) ----
@@ -3091,6 +3117,9 @@ function openNoticeModal(pollOnly, editNotice) {
   $('#pollAnon').disabled = !!n;
   if (n && n.poll) $('#pollDeadline').value = localDatetimeValue(n.poll.deadline - Date.now());
   else if (pollOnly) $('#pollDeadline').value = localDatetimeValue(7 * 86400000);
+  // 수정할 때 원래 마감 시각 기억 — 마감 시각을 바꾸지 않았으면 검사하지 않고 그대로 둔다
+  // (설문이 이미 끝난 공지도 글 내용은 고칠 수 있어야 함)
+  S.editPollDeadlineOrig = n && n.poll ? $('#pollDeadline').value : null;
   $('#noticeSchedRow').style.display = (pollOnly || n) ? 'none' : ''; // 설문/수정은 예약 숨김
   $('#noticePost').textContent = n ? '수정 저장' : '등록';
   $('#noticeModal').style.display = 'flex';
@@ -3131,7 +3160,9 @@ $('#noticePost').addEventListener('click', async () => {
   const payload = editing
     ? { type: 'edit_notice', noticeId: editing, title, body: $('#noticeBody').value }
     : { type: 'post_notice', title, body: $('#noticeBody').value };
-  if ($('#noticePollChk').checked) {
+  // 수정하면서 마감 시각을 그대로 둔 경우: 설문은 건드리지 않고 글만 고친다
+  const keepDeadline = editing && S.editPollDeadlineOrig !== null && $('#pollDeadline').value === S.editPollDeadlineOrig;
+  if ($('#noticePollChk').checked && !keepDeadline) {
     const deadline = new Date($('#pollDeadline').value).getTime();
     if (!deadline || isNaN(deadline) || deadline < Date.now() + 60000)
       return $('#noticeError').textContent = '설문 마감 시각은 최소 1분 이후여야 합니다.';
@@ -3450,7 +3481,7 @@ $('#dlDirBtn').addEventListener('click', () => window.native.openDownloadDir());
 
 // 모든 모달 오른쪽 위 닫기(X) 버튼 — 각 모달의 취소/닫기 버튼과 같은 동작 (쪽지 보내기는 전용 X 버튼 있음)
 const MODAL_CLOSE_BTN = {
-  detailModal: '#detailClose', noticeModal: '#noticeCancel', groupModal: '#groupModalCancel',
+  noticeModal: '#noticeCancel', groupModal: '#groupModalCancel',
   adminModal: '#adminClose', roomModal: '#roomModalCancel', settingsModal: '#settingsClose',
   profileModal: '#pwCancel', deptRenameModal: '#drCancel', aboutModal: '#aboutClose', signupModal: '#signupCancel',
   roomPollModal: '#rpCancel', signupMgrModal: '#signupMgrClose'
