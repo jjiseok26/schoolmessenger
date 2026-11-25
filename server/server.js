@@ -57,6 +57,27 @@ function deriveAesKey(ecdh, clientPubB64) {
 // 사용자 세부 정보 필드와 최대 길이 (내 정보·서버 관리 화면·엑셀 가져오기 공용)
 const USER_DETAIL_FIELDS = { office: 50, subject: 50, phone: 30, mobile: 30, email: 60 };
 
+// 조직도 아이콘(아바타) 꾸미기 — 내 정보 수정에서 모양·색·글자(또는 그림 아이콘)를 고른다.
+//  저장 형태: { shape, color, kind: 'initial'|'text'|'icon', value }  (null 이면 기본: 원 + 자동 색 + 이름 첫 글자)
+const AVATAR_SHAPES = ['circle', 'rounded', 'square', 'hexagon', 'flower'];
+function cleanAvatar(a) {
+  if (!a || typeof a !== 'object') return null;
+  const shape = AVATAR_SHAPES.includes(a.shape) ? a.shape : 'circle';
+  const color = /^#[0-9a-fA-F]{6}$/.test(String(a.color || '')) ? String(a.color) : '';
+  let kind = ['initial', 'text', 'icon'].includes(a.kind) ? a.kind : 'initial';
+  let value = String(a.value || '').trim();
+  if (kind === 'text') {
+    // 글자·이모지 최대 2자 (이모지는 여러 코드로 이뤄질 수 있어 글자 단위로 자름)
+    const seg = new Intl.Segmenter('ko', { granularity: 'grapheme' });
+    value = [...seg.segment(value)].slice(0, 2).map(s => s.segment).join('').slice(0, 16);
+  } else if (kind === 'icon') {
+    value = /^[a-z0-9_]{1,40}$/.test(value) ? value : '';
+  } else value = '';
+  if (kind !== 'initial' && !value) kind = 'initial';
+  if (shape === 'circle' && !color && kind === 'initial') return null; // 기본 모양과 같으면 저장하지 않음
+  return { shape, color, kind, value };
+}
+
 // 부서 문자열/배열 → 부서 배열 (쉼표/세미콜론으로 여러 부서 소속 가능)
 function parseDepts(v) {
   const arr = Array.isArray(v) ? v : String(v || '').split(/[,;]/);
@@ -659,6 +680,7 @@ class MessengerServer {
       id: u.id, name: u.name, dept: u.dept, depts: u.depts || [u.dept], position: u.position,
       office: u.office || '', subject: u.subject || '',
       phone: u.phone || '', mobile: u.mobile || '', email: u.email || '',
+      avatar: u.avatar || null,
       admin: !!u.admin,
       system: u.id === 'admin', // 시스템 기본 계정 표시 (숨김 처리는 이 값으로만)
       online,
@@ -689,6 +711,8 @@ class MessengerServer {
       case 'set_status': return this._doSetStatus(ws, msg);
       case 'create_room': return this._doCreateRoom(ws, msg);
       case 'room_message': return this._doRoomMessage(ws, msg);
+      case 'edit_room_message': return this._doEditRoomMessage(ws, msg);
+      case 'recall_room_message': return this._doRecallRoomMessage(ws, msg);
       case 'room_poll': return this._doRoomPoll(ws, msg);
       case 'vote_room_poll': return this._doVoteRoomPoll(ws, msg);
       case 'close_poll': return this._doClosePoll(ws, msg);
@@ -1105,6 +1129,49 @@ class MessengerServer {
     this._sendRoomMsg(room, m);
   }
 
+  // 채팅방에서 내가 쓴 글 찾기 (수정·회수 공용) — 쓴 사람 본인만, 시스템 안내·회수된 글은 제외
+  _findMyRoomMsg(ws, msg) {
+    const room = this.db.rooms.find(r => r.id === msg.roomId);
+    if (!room || !room.members.includes(ws.userId)) return {};
+    const m = this.db.roomMsgs.find(x => x.id === msg.msgId && x.roomId === room.id);
+    if (!m || m.system || m.recalled) return {};
+    if (m.from !== ws.userId) {
+      this._send(ws, { type: 'error', error: '내가 쓴 글만 수정하거나 회수할 수 있습니다.' });
+      return {};
+    }
+    return { room, m };
+  }
+
+  // 채팅방 글 수정 — 글자만 바꾼다 (첨부·설문은 그대로). 모두의 화면에 '수정됨'으로 표시
+  _doEditRoomMessage(ws, msg) {
+    const { room, m } = this._findMyRoomMsg(ws, msg);
+    if (!m) return;
+    if (m.poll) return this._send(ws, { type: 'error', error: '설문은 수정할 수 없습니다. 회수한 뒤 다시 만들어 주세요.' });
+    const text = String(msg.text || '').slice(0, MAX_TEXT_LEN);
+    if (!text.trim() && !m.attachments.length) return this._send(ws, { type: 'error', error: '내용을 입력하세요.' });
+    if (text === m.text) return;
+    m.text = text;
+    m.edited = Date.now();
+    this._saveSoon();
+    this.log(`채팅방 글 수정: ${this._userLabel(ws.userId)} (${room.name})`);
+    this._sendRoomMsg(room, m, 'room_message_updated');
+  }
+
+  // 채팅방 글 회수 — 내용·첨부·설문을 지우고 '회수된 메시지' 자리만 남긴다
+  // (예전 클라이언트도 알아볼 수 있도록 text 에 안내 문구를 넣어 둔다)
+  _doRecallRoomMessage(ws, msg) {
+    const { room, m } = this._findMyRoomMsg(ws, msg);
+    if (!m) return;
+    m.text = '회수된 메시지입니다.';
+    m.attachments = [];
+    delete m.poll;
+    delete m.edited;
+    m.recalled = Date.now();
+    this._saveSoon();
+    this.log(`채팅방 글 회수: ${this._userLabel(ws.userId)} (${room.name})`);
+    this._sendRoomMsg(room, m, 'room_message_updated');
+  }
+
   // 채팅방 설문 만들기 — 채팅방 참여자만 대상이 되는 소규모 설문
   _doRoomPoll(ws, msg) {
     const room = this.db.rooms.find(r => r.id === msg.roomId);
@@ -1263,6 +1330,11 @@ class MessengerServer {
     const details = {};
     for (const f of Object.keys(USER_DETAIL_FIELDS)) details[f] = msg[f] || '';
     this._applyUserDetails(u, details);
+    // 조직도 아이콘 (예전 클라이언트는 avatar 를 보내지 않으므로 그때는 그대로 둔다)
+    if (msg.avatar !== undefined) {
+      const av = cleanAvatar(msg.avatar);
+      if (av) u.avatar = av; else delete u.avatar;
+    }
     this._saveSoon();
     this._broadcastUsers();
     this._send(ws, { type: 'profile_updated' });

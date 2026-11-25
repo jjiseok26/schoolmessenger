@@ -58,12 +58,15 @@ schoolmessenger/
 ### 데이터 모델 (data.json)
 ```
 users:   { id, name, dept(대표 부서), depts[](다중 소속), position, office, subject, phone, mobile, email,
-           admin(bool), salt, pw(hash) }
+           admin(bool), salt, pw(hash), avatar? }
+avatar:  { shape: circle|rounded|square|hexagon|flower, color: '#rrggbb'|'', kind: initial|text|icon, value }
+         — 없으면(null) 원 + 아이디로 정한 색 + 이름 첫 글자. 서버 `cleanAvatar` 가 검사(모르는 모양→circle, 색 형식 아니면 '',
+           text 는 Intl.Segmenter 로 2글자(이모지 1글자 취급), icon 은 [a-z0-9_]{1,40}, 기본과 같으면 null 저장)
 messages:{ id, from, to[], text, attachments[{name,size,url}], time, readBy[], deletedBy[], scheduled? }
 notices: { id, authorId, authorName, title, body, time, poll? }
 poll:    { q, options[], deadline, multi(복수선택), anon(투표자 미공개), votes{ userId: [optIdx,...] } }
          — 예전 형식(votes{userId:optIdx})은 불러올 때 배열로 자동 변환
-rooms:   { id, name, creator, members[], time } / roomMsgs: { id, roomId, from, text, attachments, time, system?, poll? }
+rooms:   { id, name, creator, members[], time } / roomMsgs: { id, roomId, from, text, attachments, time, system?, poll?, edited?, recalled? }
 scheduled:        예약 쪽지 { id, from, to[], text, attachments, sendAt, created }
 scheduledNotices: 예약 공지 { id, authorId, authorName, title, body, poll, publishAt }
 userGroups: 개인 사용자 그룹 { id, owner, name, members[] }
@@ -98,6 +101,12 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 - 채팅방: `create_room`, `room_message`, `add_room_members`, `leave_room` (+입장/퇴장 시스템 메시지),
   `room_poll{roomId, poll{q,options,deadline,multi,anon}}` → 방 참여자에게만 설문 메시지 전송(일부 인원 대상 설문),
   `vote_room_poll{roomId,msgId,options[]}` → `room_message_updated`(참여자에게만)
+- 채팅방 글 수정·회수 (쓴 사람 본인만, 시스템 안내·이미 회수된 글 제외, 남의 글이면 error "내가 쓴 글만 수정하거나 회수할 수 있습니다."):
+  `edit_room_message{roomId,msgId,text}` → 글자만 바꾸고 `edited=시각` (설문은 거부, 첨부가 없으면 빈 글 거부),
+  `recall_room_message{roomId,msgId}` → `text='회수된 메시지입니다.'`(예전 클라이언트 호환), attachments=[], poll·edited 삭제, `recalled=시각`.
+  둘 다 `room_message_updated` 로 방 참여자 모두에게 보내고 활동 로그에 남김
+- 내 정보: `update_profile{dept?, office, subject, phone, mobile, email, avatar?}` — avatar 가 없으면(예전 클라이언트) 아이콘은 그대로 둠.
+  `_publicUser` 에 `avatar` 포함 → `users` 브로드캐스트로 모두의 조직도에 반영
 - 공지: `post_notice{title,body,poll?{options,deadline,multi,anon},publishAt?}`(누구나),
   `vote_poll{noticeId, options[]}`(마감 전 변경 가능, 빈 배열이면 투표 취소, `notice_updated`), `delete_notice`, `cancel_scheduled_notice`
 - **설문 전송 규칙**: 서버는 저장된 votes를 그대로 보내지 않고 보는 사람별로 가공해서 보냄 —
@@ -142,7 +151,7 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 - 카드 구성:
   1. **서버 상태**: 접속 주소(LAN IP:포트), 포트 변경, 등록/접속 사용자 수, 학교 이름, Windows 시작 시 자동 실행 체크
   2. **사용자 관리**: **[계정 추가] / 줄의 ✏(연필, 또는 줄 두 번 클릭)** → 같은 모달(2열): 아이디*(수정 때는 읽기 전용)·초기/새 비밀번호·이름*·부서(datalist)·직위·
-     **담당 과목·사무실 위치·사무실 전화·핸드폰·이메일**(전화는 blur 때 자동 하이픈)·관리자 권한 스위치(기본 admin 계정은 끌 수 없음).
+     **담당 과목·사무실 위치·사무실 전화·핸드폰·이메일**(전화는 치는 동안 자동 하이픈)·관리자 권한 스위치(기본 admin 계정은 끌 수 없음).
      표 열: 상태·아이디·이름·부서·직위·담당 과목·사무실 전화·권한(칩)·[✏][🗑], 검색은 세부 정보까지.
      (예전 추가 폼 순서: 아이디→비밀번호→이름→부서→직위 + 관리자 체크)
      `아이디,이름,부서,직위,비밀번호` 일괄 등록, **엑셀(xlsx 첫 시트)/CSV 가져오기**(CP949 자동 감지, 머리글 무시, 부서 다중은 `;`),
@@ -189,7 +198,10 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 ## 5. 클라이언트 앱 (Electron)
 
 ### 로그인 화면
-- 서버주소(IP:포트, 포트 생략 시 7777)/아이디/비밀번호 + 접속 정보 저장, 하단 ⓒ jiseok
+- 서버주소(IP:포트, 포트 생략 시 7777, 예시 placeholder `예: 10.112.120.40:7777`)/아이디/비밀번호 + 접속 정보 저장, 하단 ⓒ jiseok
+- **서버 주소는 하나만**: `normServer()` 가 http:// 와 끝의 / 를 떼고 포트를 붙이며, 공백·쉼표·세미콜론이 있으면 거부("서버 주소는 하나만 입력하세요").
+  저장도 하나(localStorage `savedServer`, 새 주소로 로그인하면 덮어씀). 계정은 `savedConns: [{id, pw(base64)}]` 여러 개를 **저장된 계정** 선택으로 고름(마지막 계정이 맨 위).
+  0.9.x 의 계정별 `servers[]` 는 처음 실행 때 맨 앞 주소 하나만 `savedServer` 로 옮기고 지운다. 재접속은 같은 주소로만 4초 간격
 - **회원가입 요청** 버튼 → 모달(아이디*/비밀번호*+확인/이름*/부서*(쉼표 다중)/직위*(예: 교사, 부장)/사무실전화*(예: 062-000-0000)/담당과목(선택)/핸드폰/이메일) → 임시 WebSocket으로 전송
 - 연결 끊기면 "재접속 중" 배너 + 4초 간격 자동 재접속
 
@@ -197,7 +209,10 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 - 헤더: 학교 이름, 내 정보 요약, 상태 선택(🟢온라인/🟡자리비움/🔴수업중/🟠회의중), 설정/내 정보/정보/로그아웃(확인창)
 - **왼쪽 사이드바** — [조직도 | 사용자 그룹] 탭:
   - 조직도: 검색, 전체 선택 바(N명 선택 시 ✉쪽지/👥그룹 만들기/✕해제), 부서 접기/펼치기,
-    부서 체크박스(부서 전체 선택), 부서 ✉버튼(부서 전체 쪽지), 사용자 행(아바타+접속상태점+이름+직위+상태라벨, 체크박스)
+    부서 체크박스(부서 전체 선택), 부서 ✉버튼(부서 전체 쪽지), 사용자 행(아바타 30px+**접속상태점 13px**(배경색 2.5px 테두리, 미접속은 회색+진한 테두리)+이름+직위+상태라벨, 체크박스).
+    행에 마우스를 올리면 첫 줄에 `● 접속 중/자리비움/수업중/회의중/미접속`.
+    `avatarHtml(id, name, size, av?)` — av 를 안 주면 `userById(id).avatar`. 모양은 `.av-{shape}` 클래스(rounded 30%, square 10%,
+    hexagon·flower 는 `clip-path: polygon(...)` 퍼센트 좌표라 크기와 무관), 그림은 Material Symbols 글자(`--av-fs`), 글자 2자면 글씨를 작게
   - **접속 상태 필터**: 검색창 아래 `[전체 N] [● 접속 N] [● 미접속 N]` 세그먼트(인원 수는 시스템 계정 제외). 고르면 그 상태의 사람만 보이고
     (검색처럼 접힌 부서도 펼치고 빈 부서는 숨김), presence 가 바뀌면 바로 다시 그린다. 필터를 바꿀 때 화면에서 사라진 사람은
     선택(`treeSel`)에서도 빼서 안 보이는 사람에게 쪽지가 가지 않게 한다. "전체 선택"은 보이는 사람만 대상
@@ -235,6 +250,11 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
   - 대화/채팅방 공통 첨부: 📎 버튼, **드래그앤드롭**, **그림 붙여넣기(Ctrl+V)** 로 입력창 위 "첨부 N개" 줄에 쌓아 두고 [전송]으로 함께 발송(그림은 작은 썸네일 표시), 칩의 ✕로 개별 취소,
     상대/방을 바꾸면 대기 첨부는 비움. (드롭 중에는 브라우저가 `confirm()`을 무시하므로 확인창을 쓰면 안 됨 — 바로 첨부한다)
   - 채팅방: 그룹 채팅, 초대/나가기, 안읽음 수, 시스템 메시지, **📊 설문 버튼**(방 참여자만 대상, 대화 흐름에 설문 카드로 표시)
+  - **채팅방 글 수정·회수**: 내 글 왼쪽에 마우스를 올리면 `.b-acts`([연필 수정] [되돌리기 회수], 내 설문은 회수만).
+    수정은 그 자리의 입력 상자(`S.roomEdit = {id, roomId, draft}`) — Enter 저장(IME 조합 중 제외)·Shift+Enter 줄바꿈·Esc 취소, 새 글이 와서 다시 그려도
+    draft 와 포커스 유지, 빈 입력칸에서 ↑ = 마지막 내 글 수정, 방을 바꾸면 수정 취소. 수정된 글은 시간 옆 `수정됨`(마우스 올리면 수정 시각).
+    회수는 확인창 후 전송, 회수된 글은 `.recalled`(점선 느낌 테두리·기울임 "회수된 메시지입니다")로 모두에게 표시하고 버튼 없음.
+    `room_message_updated` 를 받으면 보고 있는 방은 다시 그리고 아니면 방 목록 미리보기만 갱신
   - 공지: 누구나 작성(설문조사: 항목+마감시각+선택방식+공개여부, 실시간 막대그래프 결과, 마감 후 투표 불가 / 예약 공지: 시각 지정, 목록 상단에 취소 가능 표시)
   - 설문 카드(공지·채팅방 공용): 제목 옆에 `여러 개 선택/하나만 선택`·`투표자 공개/익명 투표`(마감되면 `마감`) 라벨,
     복수 선택이면 체크박스·아니면 라디오.
@@ -285,9 +305,14 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
   링크로 받은 파일의 경로까지 기억한다.
   진행률 패널은 평소 우하단(z-index 9, 모달 아래)이지만 모달이 열리면 `body.modal-open` 이 붙어 좌하단·모달 위로 옮겨져
   쪽지 창 버튼을 가리지 않으면서 진행 상황이 보인다 (모달 `.modal-bg` 의 style 변화를 MutationObserver 로 감지)
-- 이미지 첨부는 대화/쪽지에서 미리보기, 전화번호 입력은 blur 시 자동 하이픈(02/지역번호/휴대폰 구분, 문구 섞이면 그대로)
+- 이미지 첨부는 대화/쪽지에서 미리보기
+- **전화번호 자동 하이픈 (치는 동안)**: `fmtPhoneNumber` — 0 으로 시작하면 지역번호 자릿수(02=2, 0505 등=4, 나머지 3) 뒤에 가운데 3자리(다 차면 4자리)·끝 4자리로
+  나눠 바로 `-` 를 넣고, 15~19 로 시작하면 1588-1234. 0/15~19 로 시작하지 않는 숫자(교내 내선)·문구가 섞인 값·자릿수가 넘치면 그대로.
+  `input` 때마다 정리하고 커서는 "같은 숫자 개수 뒤"로 되돌리며, 하이픈 바로 뒤에서 ← 지우기(`beforeinput`)는 하이픈 앞 숫자를 지운다.
+  내 정보·회원가입 요청·서버 계정 수정 창 모두 같은 규칙
 - 설정: Windows 시작 시 자동 실행, 알림음, 다크 모드(전체 화면 대응, localStorage 저장)
-- 내 정보 수정: 사무실 번호/담당 과목/사무실 전화/핸드폰/이메일 + 비밀번호 변경(같은 모달)
+- 내 정보 수정(넓은 모달, 2열 입력): **조직도 아이콘 꾸미기**(왼쪽 64px 미리보기+내 상태 점+[기본으로], 모양 5개 버튼은 지금 고른 색·글자로 그린 미리보기,
+  색 `자동`+16색, 안에 넣기 [이름 첫 글자|글자 직접 입력(2글자 제한)|그림(28개 격자)]) + 부서/사무실 위치/담당 과목/사무실 전화/핸드폰/이메일 + 비밀번호 변경(같은 모달)
 - 트레이 상주(닫아도 알림 수신), 자동 업데이트(로그인 시 서버 등록 버전과 비교 → 묻지 않고 백그라운드 다운로드(진행률은 오른쪽 아래 패널) → 헤더 아래 전체 너비 노란 배너 "새 버전 vX이(가) 준비되었습니다 [지금 재시작하여 업데이트] [나중에]" → 버튼 클릭 시 NSIS 설치파일을 `/S --updated --force-run`으로 분리 실행하고 앱 종료 → 무음 설치 후 새 버전 자동 실행. 배너를 닫고 그냥 종료하면 `before-quit`에서 `/S --updated`로 무음 설치만 하여 다음 실행 때 새 버전 적용. 같은 버전 중복 다운로드 방지, 다운로드 실패 시 다음 로그인 때 재시도)
 
 ### Electron 함정 (반드시 처리)
@@ -301,7 +326,7 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 4. electron-builder의 winCodeSign 압축 해제가 심볼릭 링크 권한으로 실패할 수 있음 → 캐시에 수동 압축 해제로 우회
 5. 알림 앱 이름: `app.setAppUserModelId(appId)` + 한글 productName
 
-### 클라이언트 업데이트 (v0.9.11)
+### 클라이언트 업데이트 (v0.9.11~)
 - 로그인 때 `S.serverClientVer`(서버 등록본)가 내 버전보다 새로우면 서버 `/client-update` 에서, 아니면 `S.updateRepo` 가 있을 때
   메인 프로세스 `check-github-update(repo)`(공개 API, 10초 제한)로 GitHub 최신 클라이언트 자산을 찾아 `browser_download_url` 로 받음.
   GitHub 직접 확인은 **6시간에 한 번**(localStorage `ghCheckAt`, 학교는 인터넷 주소 하나를 같이 써서 요청 한도에 걸림), [정보] → [업데이트 확인]은 즉시.
@@ -316,7 +341,9 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
   설문 투표/마감/복수선택/투표취소/익명 설문의 투표자 비노출/예전 형식 마이그레이션, 채팅방 설문(비멤버 차단),
   채팅방 생성/초대/나가기/비멤버 차단, 그룹 CRUD/타인 수정 차단, 관리자 권한 검사(부서 순서/이름변경/계정 CRUD),
   회원가입(필수 누락/중복/승인/거절/관리자 알림/일반 사용자의 승인 시도 차단), 다중 부서, CORS 헤더,
-  파일 업로드/다운로드/무인증 거부, 활동 로그, DB 저장
+  파일 업로드/다운로드/무인증 거부, 활동 로그, DB 저장,
+  채팅방 글 수정·회수(남의 글·시스템 안내·방을 나간 사람 차단, 빈 글 거부, 첨부 글은 글자 없이 수정, 설문은 수정 거부·회수 가능, 회수 후 수정 불가),
+  조직도 아이콘(잘못된 모양·색·그림 이름 정리, 2글자 제한, 예전 클라이언트 저장 시 유지, 기본값이면 null, 다시 로그인해도 유지)
 - 클라이언트 UI는 `electron.exe . --remote-debugging-port=<포트>`로 띄우고 CDP(`Runtime.evaluate`)로 실제 화면을 조작해 검증
   (로그인 → 설문 만들기/투표/투표자 표시, 드래그앤드롭 첨부, 가입 승인까지). `confirm/alert`은 테스트 중 임시 대체
 - 빌드 후 패키징된 exe를 실제 실행해 /health, 로그인, 클라이언트 창 표시 확인

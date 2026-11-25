@@ -119,19 +119,38 @@ function openUserModal(u) {
   (u ? $('#eName') : $('#eId')).focus();
 }
 
-// 전화번호 자동 하이픈 (숫자만 입력해도 062-000-0000 형태로)
+// 전화번호 자동 하이픈 — 숫자를 치는 동안 062-000-0000 형태로 (클라이언트 내 정보 수정과 같은 규칙)
+//  0 이나 15~19 로 시작하지 않는 숫자(교내 내선 등)·문구가 섞인 값·자릿수가 넘치는 번호는 그대로
 function formatPhone(v) {
-  const d = String(v).replace(/\D/g, '');
-  if (!d || /[^\d\s()+-]/.test(v)) return v; // 문구가 섞여 있으면 그대로
-  if (d.startsWith('02')) {
-    if (d.length <= 9) return d.slice(0, 2) + '-' + d.slice(2, d.length - 4) + '-' + d.slice(-4);
-    return d.slice(0, 2) + '-' + d.slice(2, 6) + '-' + d.slice(6, 10);
-  }
-  if (d.length < 9) return v;
-  if (d.length <= 10) return d.slice(0, 3) + '-' + d.slice(3, d.length - 4) + '-' + d.slice(-4);
-  return d.slice(0, 3) + '-' + d.slice(3, 7) + '-' + d.slice(7, 11);
+  if (!/^[\d\s-]+$/.test(v)) return v;
+  const d = v.replace(/\D/g, '');
+  const join = (...parts) => parts.filter(Boolean).join('-');
+  if (/^1[5-9]/.test(d)) return d.length > 8 ? v : join(d.slice(0, 4), d.slice(4)); // 대표번호
+  if (!d.startsWith('0')) return v;
+  const a = d.startsWith('02') ? 2 : /^0(50[2-9]|130)/.test(d) ? 4 : 3;
+  if (d.length > a + 8) return v;
+  if (d.length === a + 8) return join(d.slice(0, a), d.slice(a, a + 4), d.slice(a + 4));
+  return join(d.slice(0, a), d.slice(a, a + 3), d.slice(a + 3));
 }
-for (const id of ['#ePhone', '#eMobile']) $(id).addEventListener('blur', (e) => { e.target.value = formatPhone(e.target.value.trim()); });
+for (const id of ['#ePhone', '#eMobile']) {
+  const input = $(id);
+  input.addEventListener('beforeinput', (e) => {
+    const p = input.selectionStart;
+    if (e.inputType === 'deleteContentBackward' && p === input.selectionEnd && p > 1 && input.value[p - 1] === '-') {
+      input.setSelectionRange(p - 1, p - 1); // 하이픈 뒤에서 지우면 앞 숫자를 지운다
+    }
+  });
+  input.addEventListener('input', () => {
+    const v = input.value, f = formatPhone(v);
+    if (f === v) return;
+    const digitsBefore = v.slice(0, input.selectionStart).replace(/\D/g, '').length;
+    input.value = f;
+    let pos = 0, n = 0;
+    while (pos < f.length && n < digitsBefore) { if (/\d/.test(f[pos])) n++; pos++; }
+    input.setSelectionRange(pos, pos);
+  });
+  input.addEventListener('blur', () => { input.value = formatPhone(input.value.trim()); });
+}
 
 $('#editCancel').addEventListener('click', () => { $('#editModal').style.display = 'none'; });
 $('#editSave').addEventListener('click', async () => {

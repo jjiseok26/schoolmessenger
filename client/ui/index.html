@@ -13,15 +13,15 @@
     <div class="login-logo"><span class="msi">school</span></div>
     <h1>학교메신저</h1>
     <p class="login-sub">교직원 계정으로 로그인하세요</p>
+    <label>서버 주소</label>
+    <input id="loginServer" placeholder="예: 10.112.120.40:7777">
     <div id="savedConnRow" style="display:none">
-      <label>저장된 접속 정보</label>
+      <label>저장된 계정</label>
       <div class="saved-conn-row">
         <select id="savedConnSel"></select>
-        <button id="savedConnDel" title="선택한 접속 정보 삭제"><span class="msi">delete</span></button>
+        <button id="savedConnDel" title="선택한 계정의 저장된 정보 삭제"><span class="msi">delete</span></button>
       </div>
     </div>
-    <label>서버 주소 <span class="sub">(유선/무선 등 여러 개는 쉼표로)</span></label>
-    <input id="loginServer" placeholder="예: 10.112.120.42:7777, 10.52.72.142:7777">
     <label>아이디</label>
     <input id="loginId" placeholder="아이디">
     <label>비밀번호</label>
@@ -46,9 +46,9 @@
       <div><label>이름 *</label><input id="suName" placeholder="예: 홍길동"></div>
       <div><label>부서/학년 *</label><input id="suDept" placeholder="예: 1학년 (쉼표로 여러 개)"></div>
       <div><label>직위 *</label><input id="suPos" placeholder="예: 교사, 부장"></div>
-      <div><label>사무실 전화 *</label><input id="suPhone" placeholder="예: 062-000-0000"></div>
+      <div><label>사무실 전화 *</label><input id="suPhone" inputmode="tel" placeholder="예: 062-000-0000"></div>
       <div><label>담당 과목</label><input id="suSubject" placeholder="예: 수학 (선택)"></div>
-      <div><label>핸드폰</label><input id="suMobile" placeholder="예: 010-0000-0000"></div>
+      <div><label>핸드폰</label><input id="suMobile" inputmode="tel" placeholder="예: 010-0000-0000"></div>
       <div><label>이메일</label><input id="suEmail" placeholder="예: teacher@school.kr"></div>
     </div>
     <div id="signupError" class="error"></div>
@@ -447,27 +447,46 @@
 
 <!-- 내 정보 수정 모달 (프로필 + 비밀번호) -->
 <div id="profileModal" class="modal-bg" style="display:none">
-  <div class="modal narrow">
+  <div class="modal pf-modal">
     <h2>내 정보 수정</h2>
-    <label>내 부서/학년 <span class="hint-inline">(쉼표로 여러 부서 소속 가능)</span></label>
-    <input id="pfDept" placeholder="예: 1학년, 교무부">
-    <label>사무실 위치</label>
-    <input id="pfOffice" placeholder="예: 2층 교무실">
-    <label>담당 과목</label>
-    <input id="pfSubject" placeholder="예: 수학">
-    <label>사무실 전화</label>
-    <input id="pfPhone" placeholder="예: 062-000-0000">
-    <label>핸드폰</label>
-    <input id="pfMobile" placeholder="예: 010-0000-0000">
-    <label>이메일</label>
-    <input id="pfEmail" placeholder="예: teacher@school.kr">
+    <div class="pf-sec">조직도 아이콘 <span class="hint-inline">(다른 선생님들 조직도에도 이렇게 보입니다)</span></div>
+    <div class="av-editor">
+      <div class="av-preview-box">
+        <div id="avPreview" class="av-preview"></div>
+        <button id="avReset" type="button" class="text-btn"><span class="msi">restart_alt</span>기본으로</button>
+      </div>
+      <div class="av-opts">
+        <div class="av-row"><span class="av-lb">모양</span><div id="avShapes" class="av-shapes"></div></div>
+        <div class="av-row"><span class="av-lb">색</span><div id="avColors" class="av-colors"></div></div>
+        <div class="av-row"><span class="av-lb">안에 넣기</span>
+          <div id="avKind" class="av-kind">
+            <button type="button" data-k="initial">이름 첫 글자</button>
+            <button type="button" data-k="text">글자 직접 입력</button>
+            <button type="button" data-k="icon">그림</button>
+          </div>
+        </div>
+        <input id="avText" maxlength="16" placeholder="최대 2자 (예: 수학 · 🍀 · A)" style="display:none">
+        <div id="avIcons" class="av-icons" style="display:none"></div>
+      </div>
+    </div>
+    <div class="pf-divider">내 정보</div>
+    <div class="su-grid">
+      <div class="span2"><label>내 부서/학년 <span class="hint-inline">(쉼표로 여러 부서 소속 가능)</span></label>
+        <input id="pfDept" placeholder="예: 1학년, 교무부"></div>
+      <div><label>사무실 위치</label><input id="pfOffice" placeholder="예: 2층 교무실"></div>
+      <div><label>담당 과목</label><input id="pfSubject" placeholder="예: 수학"></div>
+      <div><label>사무실 전화 <span class="hint-inline">(숫자만 쳐도 - 자동)</span></label>
+        <input id="pfPhone" inputmode="tel" placeholder="예: 062-000-0000"></div>
+      <div><label>핸드폰 <span class="hint-inline">(숫자만 쳐도 - 자동)</span></label>
+        <input id="pfMobile" inputmode="tel" placeholder="예: 010-0000-0000"></div>
+      <div class="span2"><label>이메일</label><input id="pfEmail" placeholder="예: teacher@school.kr"></div>
+    </div>
     <div class="pf-divider">비밀번호 변경 <span class="hint-inline">(바꿀 때만 입력)</span></div>
-    <label>현재 비밀번호</label>
-    <input id="pwOld" type="password">
-    <label>새 비밀번호 (4자 이상)</label>
-    <input id="pwNew" type="password">
-    <label>새 비밀번호 확인</label>
-    <input id="pwNew2" type="password">
+    <div class="su-grid three">
+      <div><label>현재 비밀번호</label><input id="pwOld" type="password"></div>
+      <div><label>새 비밀번호 (4자 이상)</label><input id="pwNew" type="password"></div>
+      <div><label>새 비밀번호 확인</label><input id="pwNew2" type="password"></div>
+    </div>
     <div id="pwError" class="error"></div>
     <div class="modal-btns">
       <button id="pwCancel">취소</button>

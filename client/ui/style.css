@@ -262,11 +262,23 @@ aside {
   display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; user-select: none;
 }
-.avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
-.presence-dot {
-  position: absolute; bottom: -1px; right: -2px;
-  width: 10px; height: 10px; border: 2px solid var(--bg); box-sizing: content-box;
+.avatar .msi { font-size: var(--av-fs); }
+/* 꾸민 아이콘 모양 (내 정보 수정) */
+.avatar.av-rounded { border-radius: 30%; }
+.avatar.av-square { border-radius: 10%; }
+.avatar.av-hexagon { border-radius: 0; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
+.avatar.av-flower {
+  border-radius: 0;
+  clip-path: polygon(100.0% 50.0%,98.6% 54.3%,95.2% 58.0%,91.1% 61.0%,87.9% 63.8%,86.5% 67.0%,86.8% 71.3%,87.6% 76.3%,87.4% 81.4%,85.4% 85.4%,81.4% 87.4%,76.3% 87.6%,71.3% 86.8%,67.0% 86.5%,63.8% 87.9%,61.0% 91.1%,58.0% 95.2%,54.3% 98.6%,50.0% 100.0%,45.7% 98.6%,42.0% 95.2%,39.0% 91.1%,36.2% 87.9%,33.0% 86.5%,28.8% 86.8%,23.7% 87.6%,18.6% 87.4%,14.6% 85.4%,12.6% 81.4%,12.4% 76.3%,13.2% 71.3%,13.5% 67.0%,12.1% 63.8%,8.9% 61.0%,4.8% 58.0%,1.4% 54.3%,0.0% 50.0%,1.4% 45.7%,4.8% 42.0%,8.9% 39.0%,12.1% 36.2%,13.5% 33.0%,13.2% 28.7%,12.4% 23.7%,12.6% 18.6%,14.6% 14.6%,18.6% 12.6%,23.7% 12.4%,28.7% 13.2%,33.0% 13.5%,36.2% 12.1%,39.0% 8.9%,42.0% 4.8%,45.7% 1.4%,50.0% 0.0%,54.3% 1.4%,58.0% 4.8%,61.0% 8.9%,63.8% 12.1%,67.0% 13.5%,71.3% 13.2%,76.3% 12.4%,81.4% 12.6%,85.4% 14.6%,87.4% 18.6%,87.6% 23.7%,86.8% 28.7%,86.5% 33.0%,87.9% 36.2%,91.1% 39.0%,95.2% 42.0%,98.6% 45.7%);
 }
+.avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+/* 접속 상태 점: 멀리서도 잘 보이도록 크게 + 배경색 테두리로 아이콘과 구분 */
+.avatar-wrap .presence-dot {
+  position: absolute; bottom: -3px; right: -4px;
+  width: 13px; height: 13px; border: 2.5px solid var(--bg); box-sizing: content-box;
+}
+.avatar-wrap .presence-dot.off { background: #bdc1c6; box-shadow: inset 0 0 0 2px #80868b; }
+body.dark .avatar-wrap .presence-dot.off { background: #5f6368; box-shadow: inset 0 0 0 2px #9aa0a6; }
 .user-row.me-row { color: var(--on-surface-variant); }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .dot.on { background: #1e8e3e; }
@@ -395,6 +407,26 @@ button.icon-only { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
 .room-head .spacer { flex: 1; }
 .danger-text { color: var(--error) !important; }
 .bubble .bwho { display: block; font-size: 12px; color: var(--on-surface-variant); font-weight: 500; margin-bottom: 2px; }
+/* 채팅방: 내 글 수정·회수 */
+.b-acts { display: flex; align-items: center; gap: 2px; margin-right: 6px; visibility: hidden; }
+.bubble-row:hover .b-acts { visibility: visible; }
+.b-acts button { color: var(--on-surface-variant); border-color: transparent; }
+.b-acts button:hover { background: var(--hover); }
+.bubble-row.recalled .bubble { background: transparent; box-shadow: inset 0 0 0 1px var(--outline-variant); color: var(--on-surface-variant); }
+.recalled-text { display: inline-flex; align-items: center; gap: 4px; font-style: italic; }
+.recalled-text .msi { font-size: 16px; }
+.bubble.room-edit {
+  width: min(560px, 80%); max-width: 80%; padding: 10px; white-space: normal;
+  background: var(--surface); box-shadow: inset 0 0 0 2px var(--primary);
+}
+.room-edit textarea {
+  display: block; width: 100%; min-height: 0; resize: none; border: none; border-radius: 0; background: transparent;
+  padding: 4px 6px; font: inherit; line-height: 1.5; color: inherit; box-shadow: none; overflow-y: auto;
+}
+.room-edit textarea:focus { box-shadow: none; }
+.room-edit-btns { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; white-space: normal; }
+.room-edit-btns .hint-inline { margin-right: auto; }
+.room-edit-btns button { padding: 5px 14px; font-size: 13px; }
 .bubble-row.system { justify-content: center; }
 .bubble-row.system .bubble {
   background: transparent; border: none; color: var(--on-surface-variant); font-size: 13px; max-width: 90%;
@@ -806,6 +838,51 @@ body.dark .ctx-menu { background: var(--surface-2); }
   margin: 18px 0 4px; padding-top: 14px; border-top: 1px solid var(--divider);
   font-size: 14px; font-weight: 500; color: var(--on-surface);
 }
+
+/* 내 정보 수정: 조직도 아이콘 꾸미기 */
+.modal.pf-modal { width: 640px; max-width: 96vw; }
+.pf-sec { font-size: 14px; font-weight: 500; color: var(--on-surface); margin-bottom: 10px; }
+.su-grid .span2 { grid-column: span 2; }
+.su-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+.av-editor { display: flex; gap: 20px; align-items: flex-start; }
+.av-preview-box {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0;
+  width: 132px; padding: 16px 8px 8px; border-radius: 16px; background: var(--surface-1);
+}
+.av-preview { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 13px; color: var(--on-surface-variant); }
+.av-preview .avatar-wrap .presence-dot { border-color: var(--surface-1); }
+.av-preview-box .text-btn { font-size: 13px; padding: 4px 10px; }
+.av-opts { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.av-row { display: flex; align-items: center; gap: 10px; }
+.av-lb { width: 64px; flex-shrink: 0; font-size: 13px; font-weight: 500; color: var(--on-surface-variant); }
+.av-shapes, .av-colors, .av-kind { display: flex; flex-wrap: wrap; gap: 6px; }
+.av-shapes button {
+  width: 40px; height: 40px; padding: 0; border-radius: 12px; border-color: var(--outline-variant);
+}
+.av-shapes button .avatar { pointer-events: none; }
+.av-shapes button.on, .av-icons button.on {
+  border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); background: var(--primary-hover);
+}
+.av-colors button {
+  width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid transparent;
+  box-shadow: inset 0 0 0 2px var(--surface);
+}
+.av-colors button.on { border-color: var(--on-surface); }
+.av-colors button.auto {
+  width: auto; padding: 0 10px; border-radius: 13px; border: 1px solid var(--outline-variant); box-shadow: none;
+  font-size: 12px; color: var(--on-surface-variant);
+}
+.av-colors button.auto.on { border-color: var(--primary); color: var(--primary); background: var(--primary-hover); }
+.av-kind button { padding: 5px 12px; font-size: 13px; border-radius: 8px; color: var(--on-surface-variant); }
+.av-kind button.on { background: var(--secondary-container); color: var(--on-secondary-container); border-color: transparent; }
+#avText { margin-left: 74px; width: calc(100% - 74px); }
+.av-icons {
+  margin-left: 74px; display: grid; grid-template-columns: repeat(auto-fill, 36px); gap: 4px;
+  max-height: 124px; overflow-y: auto; padding: 2px;
+}
+.av-icons button { width: 36px; height: 36px; padding: 0; border-radius: 10px; border-color: transparent; color: var(--on-surface-variant); }
+.av-icons button .msi { font-size: 22px; }
+.av-icons button:hover { background: var(--hover); }
 
 /* 드래그앤드롭 */
 .drag-over {

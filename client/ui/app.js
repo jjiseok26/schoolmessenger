@@ -58,8 +58,28 @@ function avColor(id) {
   for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return AV_COLORS[h % AV_COLORS.length];
 }
-function avatarHtml(id, name, size) {
-  return `<span class="avatar" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px;background:${avColor(id)}">${esc((name || '?').charAt(0))}</span>`;
+// 내 정보 수정에서 고를 수 있는 아이콘 모양·색·그림 (서버는 모양 이름과 색 형식만 검사)
+const AV_SHAPES = { circle: '원', rounded: '둥근 네모', square: '네모', hexagon: '육각형', flower: '꽃' };
+const AV_PICK_COLORS = [...AV_COLORS, '#ad1457', '#37474f', '#5f6368', '#0b57d0', '#b3261e', '#7e5700'];
+const AV_ICONS = ['school', 'face', 'sentiment_satisfied', 'mood', 'pets', 'favorite', 'star', 'local_florist',
+  'eco', 'park', 'sunny', 'coffee', 'cake', 'menu_book', 'auto_stories', 'history_edu', 'science', 'calculate',
+  'translate', 'palette', 'music_note', 'sports_soccer', 'sports_basketball', 'fitness_center', 'computer',
+  'rocket_launch', 'psychology', 'spa'];
+// av: 사용자가 꾸민 아이콘 { shape, color, kind, value } — 없으면 기본(원 + 자동 색 + 이름 첫 글자)
+function avatarHtml(id, name, size, av) {
+  if (av === undefined) av = userById(id)?.avatar;
+  av = av || {};
+  const shape = AV_SHAPES[av.shape] ? av.shape : 'circle';
+  let inner = esc((name || '?').charAt(0)), scale = 0.45;
+  if (av.kind === 'icon' && AV_ICONS.includes(av.value)) {
+    inner = `<span class="msi">${av.value}</span>`;
+    scale = 0.6;
+  } else if (av.kind === 'text' && av.value) {
+    inner = esc(av.value);
+    if ([...new Intl.Segmenter('ko', { granularity: 'grapheme' }).segment(av.value)].length > 1) scale = 0.36;
+  }
+  const fs = Math.round(size * scale);
+  return `<span class="avatar av-${shape}" style="width:${size}px;height:${size}px;font-size:${fs}px;--av-fs:${fs}px;background:${av.color || avColor(id)}">${inner}</span>`;
 }
 
 function fmtTime(t) {
@@ -84,8 +104,7 @@ function fmtSize(n) {
 
 // ---------- 상태 ----------
 const S = {
-  server: '', serverList: [], serverIdx: 0, id: '', pw: '', token: '',
-  initialTriesLeft: 0,
+  server: '', id: '', pw: '', token: '',
   me: null, users: [], messages: [], notices: [],
   rooms: [], roomMsgs: {}, currentRoom: null,
   scheduled: [], schedNotices: [], groups: [],
@@ -214,29 +233,13 @@ function connect() {
     S.ws = null;
     if (S.intentionalClose) return;
     if (S.loggedIn) {
-      // 재접속: 저장된 서버 주소(유선/무선 등)를 번갈아 시도
       $('#connBanner').style.display = '';
-      rotateServer();
       $('#connBanner').textContent = `서버 연결이 끊어졌습니다. 재접속 중… (${S.server})`;
       S.reconnectTimer = setTimeout(connect, 4000);
-    } else if (S.initialTriesLeft > 1) {
-      // 최초 접속 실패: 다음 주소로 즉시 재시도
-      S.initialTriesLeft--;
-      rotateServer();
-      $('#loginError').textContent = `연결 실패 — 다른 주소로 시도 중… (${S.server})`;
-      connect();
     } else {
       loginFail('서버에 연결할 수 없습니다. 주소와 서버 실행 여부를 확인하세요.');
     }
   };
-}
-
-// 여러 서버 주소(유선/무선)를 순환
-function rotateServer() {
-  if (S.serverList.length > 1) {
-    S.serverIdx = (S.serverIdx + 1) % S.serverList.length;
-    S.server = S.serverList[S.serverIdx];
-  }
 }
 
 function disconnect() {
@@ -287,7 +290,6 @@ function handleServer(m) {
       // 학교 이름 표시 (제목표시줄 + 헤더)
       document.title = m.schoolName ? m.schoolName + ' 메신저' : '학교메신저';
       $('#brandName').textContent = m.schoolName || '학교메신저';
-      S.initialTriesLeft = 0;
       if (!wasReconnect) {
         if ($('#loginSave').checked) saveCurrentConn(); // 접속 성공 시 접속 정보 자동 저장
         $('#loginView').style.display = 'none';
@@ -415,12 +417,14 @@ function handleServer(m) {
       break;
     }
     case 'room_message_updated': {
-      // 채팅방 설문 투표 결과 갱신
+      // 채팅방 설문 투표 결과 갱신 / 글 수정·회수
       const msg = m.message;
       const list = S.roomMsgs[msg.roomId] || [];
       const i = list.findIndex(x => x.id === msg.id);
       if (i >= 0) list[i] = msg;
+      if (msg.recalled && S.roomEdit && S.roomEdit.id === msg.id) S.roomEdit = null;
       if (S.currentRoom === msg.roomId) renderRoomChat();
+      else renderRoomList(); // 목록의 마지막 글 미리보기
       break;
     }
     case 'room_updated': {
@@ -807,7 +811,7 @@ function buildUserRow(u, dept, level) {
   const stLabel = u.online && STATUS_LABEL[u.status] ? `<span class="ustatus">${STATUS_LABEL[u.status]}</span>` : '';
   const chkHtml = u.id === S.me.id ? '' :
     `<input type="checkbox" class="t-chk" ${S.treeSel.has(u.id) ? 'checked' : ''}>`;
-  row.innerHTML = `${chkHtml}<span class="avatar-wrap">${avatarHtml(u.id, u.name, 26)}<span class="presence-dot dot ${dotCls}"></span></span>
+  row.innerHTML = `${chkHtml}<span class="avatar-wrap">${avatarHtml(u.id, u.name, 30)}<span class="presence-dot dot ${dotCls}"></span></span>
     <span class="uname">${esc(u.name)}${u.id === S.me.id ? ' (나)' : ''}</span>
     <span class="upos">${esc(u.position || '')}</span>${stLabel}`;
   const tchk = row.querySelector('.t-chk');
@@ -1450,7 +1454,7 @@ function renderRoomList() {
 
 function openRoom(roomId) {
   // 다른 방으로 옮기면 이전 방에 붙여 두었던 첨부는 비움 (엉뚱한 방으로 전송 방지)
-  if (S.currentRoom !== roomId) S.roomFiles = [];
+  if (S.currentRoom !== roomId) { S.roomFiles = []; S.roomEdit = null; }
   S.currentRoom = roomId;
   markRoomSeen(roomId);
   renderRooms(); updateBadges();
@@ -1489,18 +1493,89 @@ function renderRoomChat() {
       t.className = 'btime';
       t.textContent = fmtTime(m.time);
       bubble.appendChild(t);
+      if (m.from === S.me.id) row.appendChild(roomMsgActions(m, false)); // 내 설문은 회수만
       row.appendChild(bubble);
+    } else if (m.recalled) {
+      const mine = m.from === S.me.id;
+      row.className = 'bubble-row recalled' + (mine ? ' mine' : '');
+      row.innerHTML = `<div class="bubble">${mine ? '' : `<span class="bwho">${esc(nameOf(m.from))}</span>`}<span class="recalled-text"><span class="msi">block</span>회수된 메시지입니다</span>
+        <span class="btime">${fmtTime(m.time)}</span></div>`;
+    } else if (S.roomEdit && S.roomEdit.id === m.id) {
+      row.className = 'bubble-row mine editing';
+      row.appendChild(roomEditBox(m));
     } else {
       const mine = m.from === S.me.id;
       row.className = 'bubble-row' + (mine ? ' mine' : '');
       row.innerHTML = `<div class="bubble">${mine ? '' : `<span class="bwho">${esc(nameOf(m.from))}</span>`}${linkify(m.text)}${m.attachments.length ? attachmentLinks(m) : ''}
-        <span class="btime">${fmtTime(m.time)}</span></div>`;
+        <span class="btime">${fmtTime(m.time)}${m.edited ? ` · <span title="${esc(fmtFull(m.edited))}에 수정">수정됨</span>` : ''}</span></div>`;
+      if (mine) row.prepend(roomMsgActions(m, true));
     }
     log.appendChild(row);
   }
   log.scrollTop = wasAtBottom ? log.scrollHeight : prevTop;
   renderPending('room');
   markRoomSeen(room.id);
+  const box = log.querySelector('.room-edit textarea');
+  if (box && document.activeElement !== box) {
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }
+}
+
+// 내 글 옆에 마우스를 올리면 나오는 [수정] [회수] 버튼
+function roomMsgActions(m, canEdit) {
+  const box = document.createElement('div');
+  box.className = 'b-acts';
+  box.innerHTML = (canEdit ? '<button class="icon-only" data-act="edit" title="수정"><span class="msi">edit</span></button>' : '') +
+    '<button class="icon-only" data-act="recall" title="회수 (모두의 화면에서 지움)"><span class="msi">undo</span></button>';
+  box.onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.act === 'edit') startRoomEdit(m);
+    else recallRoomMsg(m);
+  };
+  return box;
+}
+
+function startRoomEdit(m) {
+  S.roomEdit = { id: m.id, roomId: m.roomId, draft: m.text };
+  renderRoomChat();
+}
+
+function recallRoomMsg(m) {
+  const what = m.poll ? '이 설문을 회수할까요?\n투표 결과도 함께 지워집니다.' : '이 메시지를 회수할까요?';
+  if (!confirm(what + '\n채팅방의 모든 사람 화면에서 "회수된 메시지입니다"로 바뀝니다.')) return;
+  send({ type: 'recall_room_message', roomId: m.roomId, msgId: m.id });
+}
+
+// 글 수정 상자: Enter 저장 · Shift+Enter 줄바꿈 · Esc 취소
+function roomEditBox(m) {
+  const wrap = document.createElement('div');
+  wrap.className = 'bubble room-edit';
+  wrap.innerHTML = '<textarea rows="1"></textarea><div class="room-edit-btns"><span class="hint-inline">Enter 저장 · Esc 취소</span>' +
+    '<button data-act="cancel">취소</button><button class="primary" data-act="save">저장</button></div>';
+  const ta = wrap.querySelector('textarea');
+  ta.value = S.roomEdit.draft;
+  const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 240) + 'px'; };
+  requestAnimationFrame(fit);
+  const cancel = () => { S.roomEdit = null; renderRoomChat(); };
+  const save = () => {
+    const text = ta.value;
+    if (!text.trim() && !m.attachments.length) return alert('내용을 입력하세요. 지우려면 [회수]를 누르세요.');
+    if (text !== m.text) send({ type: 'edit_room_message', roomId: m.roomId, msgId: m.id, text });
+    S.roomEdit = null;
+    renderRoomChat();
+    $('#roomText').focus();
+  };
+  ta.addEventListener('input', () => { S.roomEdit.draft = ta.value; fit(); });
+  ta.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
+  });
+  wrap.querySelector('[data-act=cancel]').onclick = cancel;
+  wrap.querySelector('[data-act=save]').onclick = save;
+  return wrap;
 }
 
 async function sendRoomMsg(extra) {
@@ -1634,6 +1709,11 @@ $('#roomLeaveBtn').addEventListener('click', () => {
 $('#roomSendBtn').addEventListener('click', () => sendRoomMsg([]));
 $('#roomText').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendRoomMsg([]); }
+  // 입력칸이 비어 있을 때 ↑ : 방금 쓴 내 글 고치기
+  if (e.key === 'ArrowUp' && !$('#roomText').value) {
+    const last = (S.roomMsgs[S.currentRoom] || []).filter(m => m.from === S.me.id && !m.system && !m.poll && !m.recalled).at(-1);
+    if (last) { e.preventDefault(); startRoomEdit(last); }
+  }
 });
 $('#roomAttachBtn').addEventListener('click', () => $('#roomFileInput').click());
 $('#roomFileInput').addEventListener('change', () => {
@@ -1800,7 +1880,7 @@ function renderGroups() {
       const row = document.createElement('div');
       row.className = 'user-row g-member';
       row.innerHTML = `<input type="checkbox" class="g-chk" data-id="${esc(u.id)}" ${sel.has(u.id) ? 'checked' : ''}>
-        <span class="avatar-wrap">${avatarHtml(u.id, u.name, 22)}<span class="presence-dot dot ${dotCls}"></span></span>
+        <span class="avatar-wrap">${avatarHtml(u.id, u.name, 26)}<span class="presence-dot dot ${dotCls}"></span></span>
         <span class="uname">${esc(u.name)}</span><span class="upos">${esc(u.position || '')}</span>`;
       const chk = row.querySelector('input');
       const toggle = (on) => { on ? sel.add(u.id) : sel.delete(u.id); chk.checked = on; syncSelBtn(); };
@@ -2012,8 +2092,9 @@ function profileTooltip(u) {
   const base = u.id === S.me.id
     ? '우클릭: 내 정보 수정'
     : '두 번 클릭: 대화 / 우클릭: 메뉴';
-  const info = profileInfoLines(u);
-  return info.length ? info.join('\n') + '\n' + base : base;
+  const st = !u.online ? '● 미접속' : '● ' + (STATUS_LABEL[u.status] || '접속 중');
+  const info = [st, ...profileInfoLines(u)];
+  return info.join('\n') + '\n' + base;
 }
 
 // 우클릭 대상: 선택된 사용자들 중 하나를 우클릭했으면 선택 전체에 적용
@@ -3277,24 +3358,98 @@ $('#noticePost').addEventListener('click', async () => {
 });
 
 // ---------- 내 정보 수정 (프로필 + 비밀번호) ----------
-// 전화번호 자동 하이픈 (숫자만 입력된 경우에만 적용, 내선 등 문구가 있으면 그대로 둠)
+// 전화번호 자동 하이픈 — 숫자를 치는 동안 바로 넣는다. 내선 등 문구가 섞이면 그대로 둠
+//  02-123-4567 / 02-1234-5678 / 062-123-4567 / 010-1234-5678 / 0505-123-4567 / 1588-1234
+//  0 이나 15~19 로 시작하지 않는 숫자(교내 내선 1234 등)와 자릿수가 넘치는 번호는 손대지 않는다
 function fmtPhoneNumber(v) {
   if (!/^[\d\s-]+$/.test(v)) return v;
   const d = v.replace(/\D/g, '');
-  if (d.length < 8 || d.length > 11) return v;
-  if (d.startsWith('02')) {
-    if (d.length <= 9) return d.slice(0, 2) + '-' + d.slice(2, d.length - 4) + '-' + d.slice(-4);
-    return d.slice(0, 2) + '-' + d.slice(2, 6) + '-' + d.slice(6, 10);
-  }
-  if (d.length <= 10) return d.slice(0, 3) + '-' + d.slice(3, d.length - 4) + '-' + d.slice(-4);
-  return d.slice(0, 3) + '-' + d.slice(3, 7) + '-' + d.slice(7, 11);
+  const join = (...parts) => parts.filter(Boolean).join('-');
+  if (/^1[5-9]/.test(d)) return d.length > 8 ? v : join(d.slice(0, 4), d.slice(4)); // 대표번호
+  if (!d.startsWith('0')) return v;
+  const a = d.startsWith('02') ? 2 : /^0(50[2-9]|130)/.test(d) ? 4 : 3; // 지역(사업자) 번호 자릿수
+  if (d.length > a + 8) return v;
+  if (d.length === a + 8) return join(d.slice(0, a), d.slice(a, a + 4), d.slice(a + 4)); // 가운데 4자리
+  return join(d.slice(0, a), d.slice(a, a + 3), d.slice(a + 3));                         // 가운데 3자리
 }
-for (const s of ['#pfPhone', '#pfMobile']) {
-  $(s).addEventListener('blur', (e) => { e.target.value = fmtPhoneNumber(e.target.value.trim()); });
+// 입력칸에 자동 하이픈 연결: 치는 동안 정리하고 커서는 같은 숫자 뒤에 둔다.
+// 하이픈 바로 뒤에서 ← 지우기를 누르면 하이픈 앞 숫자를 지운다.
+function attachPhoneFormat(input) {
+  input.addEventListener('beforeinput', (e) => {
+    if (e.inputType !== 'deleteContentBackward') return;
+    const p = input.selectionStart;
+    if (p === input.selectionEnd && p > 1 && input.value[p - 1] === '-') input.setSelectionRange(p - 1, p - 1);
+  });
+  input.addEventListener('input', () => {
+    const v = input.value;
+    const f = fmtPhoneNumber(v);
+    if (f === v) return;
+    const digitsBefore = v.slice(0, input.selectionStart).replace(/\D/g, '').length;
+    input.value = f;
+    let pos = 0, n = 0;
+    while (pos < f.length && n < digitsBefore) { if (/\d/.test(f[pos])) n++; pos++; }
+    input.setSelectionRange(pos, pos);
+  });
+  input.addEventListener('blur', () => { input.value = fmtPhoneNumber(input.value.trim()); });
 }
+for (const s of ['#pfPhone', '#pfMobile', '#suPhone', '#suMobile']) attachPhoneFormat($(s));
+
+// 조직도 아이콘 꾸미기 — S.avEdit 에 고른 값을 담아 두었다가 [저장] 때 함께 보낸다
+function renderAvEditor() {
+  const av = S.avEdit;
+  const me = userById(S.me.id) || S.me;
+  const stCls = { online: 'on', away: 'away', class: 'class', meeting: 'meeting' }[$('#statusSel').value] || 'on';
+  $('#avPreview').innerHTML = `<span class="avatar-wrap">${avatarHtml(me.id, me.name, 64, av)}<span class="presence-dot dot ${stCls}"></span></span>
+    <span>${esc(me.name)}</span>`;
+  $('#avShapes').innerHTML = Object.entries(AV_SHAPES).map(([k, label]) =>
+    `<button type="button" data-v="${k}" title="${label}" class="${av.shape === k ? 'on' : ''}">${avatarHtml(me.id, me.name, 26, { ...av, shape: k })}</button>`).join('');
+  $('#avColors').innerHTML = `<button type="button" class="auto ${av.color ? '' : 'on'}" data-v="">자동</button>` +
+    AV_PICK_COLORS.map(c => `<button type="button" data-v="${c}" class="${av.color === c ? 'on' : ''}" style="background:${c}" title="${c}"></button>`).join('');
+  for (const b of $$('#avKind button')) b.classList.toggle('on', b.dataset.k === av.kind);
+  $('#avText').style.display = av.kind === 'text' ? '' : 'none';
+  $('#avIcons').style.display = av.kind === 'icon' ? '' : 'none';
+  for (const b of $$('#avIcons button')) b.classList.toggle('on', av.kind === 'icon' && b.dataset.v === av.value);
+}
+$('#avIcons').innerHTML = AV_ICONS.map(n => `<button type="button" data-v="${n}" title="${n}"><span class="msi">${n}</span></button>`).join('');
+$('#avShapes').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.avEdit.shape = b.dataset.v; renderAvEditor();
+});
+$('#avColors').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.avEdit.color = b.dataset.v; renderAvEditor();
+});
+$('#avKind').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const av = S.avEdit;
+  av.kind = b.dataset.k;
+  if (av.kind === 'text') { av.value = $('#avText').value.trim(); renderAvEditor(); $('#avText').focus(); return; }
+  if (av.kind === 'icon') av.value = AV_ICONS.includes(av.value) ? av.value : AV_ICONS[0];
+  renderAvEditor();
+});
+$('#avText').addEventListener('input', () => {
+  // 글자·이모지 최대 2자
+  const seg = [...new Intl.Segmenter('ko', { granularity: 'grapheme' }).segment($('#avText').value)];
+  if (seg.length > 2) $('#avText').value = seg.slice(0, 2).map(s => s.segment).join('');
+  S.avEdit.value = $('#avText').value.trim();
+  renderAvEditor();
+});
+$('#avIcons').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.avEdit.value = b.dataset.v; renderAvEditor();
+});
+$('#avReset').addEventListener('click', () => {
+  S.avEdit = { shape: 'circle', color: '', kind: 'initial', value: '' };
+  $('#avText').value = '';
+  renderAvEditor();
+});
 
 function openProfileModal() {
   const me = userById(S.me.id) || S.me;
+  const av = me.avatar || {};
+  S.avEdit = { shape: av.shape || 'circle', color: av.color || '', kind: av.kind || 'initial', value: av.value || '' };
+  $('#avText').value = S.avEdit.kind === 'text' ? S.avEdit.value : '';
+  renderAvEditor();
   $('#pfDept').value = (me.depts || [me.dept]).join(', ');
   $('#pfOffice').value = me.office || '';
   $('#pfSubject').value = me.subject || '';
@@ -3315,7 +3470,9 @@ $('#pwSubmit').addEventListener('click', () => {
     type: 'update_profile',
     dept: $('#pfDept').value.trim() || undefined,
     office: $('#pfOffice').value, subject: $('#pfSubject').value,
-    phone: $('#pfPhone').value, mobile: $('#pfMobile').value, email: $('#pfEmail').value
+    phone: fmtPhoneNumber($('#pfPhone').value.trim()), mobile: fmtPhoneNumber($('#pfMobile').value.trim()),
+    email: $('#pfEmail').value,
+    avatar: S.avEdit
   });
   // 비밀번호 칸을 채웠으면 함께 변경 (결과는 change_pw_result에서 처리)
   const wantPw = $('#pwOld').value || $('#pwNew').value || $('#pwNew2').value;
@@ -3388,15 +3545,11 @@ $('#signupBtn').addEventListener('click', () => {
   $('#suId').focus();
 });
 $('#signupCancel').addEventListener('click', () => { $('#signupModal').style.display = 'none'; });
-// 전화번호 자동 하이픈
-for (const s of ['#suPhone', '#suMobile']) {
-  $(s).addEventListener('blur', (e) => { e.target.value = fmtPhoneNumber(e.target.value.trim()); });
-}
 $('#signupSubmit').addEventListener('click', () => {
   const err = (msg) => { $('#signupError').textContent = msg; };
-  let server = $('#loginServer').value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
-  if (!server) return err('위 로그인 화면의 서버 주소를 먼저 입력하세요.');
-  if (!server.includes(':')) server += ':7777';
+  if (!$('#loginServer').value.trim()) return err('위 로그인 화면의 서버 주소를 먼저 입력하세요.');
+  const server = normServer($('#loginServer').value);
+  if (!server) return err('로그인 화면의 서버 주소는 하나만 입력하세요. (예: 10.112.120.40:7777)');
   const data = {
     id: $('#suId').value.trim(), pw: $('#suPw').value,
     name: $('#suName').value.trim(), dept: $('#suDept').value.trim(), position: $('#suPos').value.trim(),
@@ -3443,7 +3596,8 @@ $('#aboutGhLink').addEventListener('click', (e) => {
 $('#aboutClose').addEventListener('click', () => { $('#aboutModal').style.display = 'none'; });
 
 // ---------- 로그인/로그아웃 ----------
-// ---------- 저장된 접속 정보 (여러 개) ----------
+// ---------- 저장된 접속 정보 ----------
+// 서버 주소는 하나만 저장 (새 주소로 로그인하면 바뀜). 계정(아이디·비밀번호)은 여러 개 저장해 골라 쓸 수 있다.
 function getSavedConns() {
   try { return JSON.parse(localStorage.getItem('savedConns')) || []; } catch (e) { return []; }
 }
@@ -3455,13 +3609,11 @@ function renderSavedConns() {
   const list = getSavedConns();
   $('#savedConnRow').style.display = list.length ? '' : 'none';
   const sel = $('#savedConnSel');
-  sel.innerHTML = list.map((c, i) =>
-    `<option value="${i}">${esc(c.id)} @ ${esc(c.servers.join(', '))}</option>`).join('');
+  sel.innerHTML = list.map((c, i) => `<option value="${i}">${esc(c.id)}</option>`).join('');
 }
 function applySavedConn(i) {
   const c = getSavedConns()[i];
   if (!c) return;
-  $('#loginServer').value = c.servers.join(', ');
   $('#loginId').value = c.id;
   try { $('#loginPw').value = c.pw ? decodeURIComponent(atob(c.pw)) : ''; } catch (e) { $('#loginPw').value = ''; }
 }
@@ -3469,38 +3621,35 @@ $('#savedConnSel').addEventListener('change', (e) => applySavedConn(Number(e.tar
 $('#savedConnDel').addEventListener('click', () => {
   const i = Number($('#savedConnSel').value);
   const list = getSavedConns();
-  if (Number.isInteger(i) && list[i] && confirm(`'${list[i].id} @ ${list[i].servers.join(', ')}' 접속 정보를 삭제할까요?`)) {
+  if (Number.isInteger(i) && list[i] && confirm(`'${list[i].id}' 계정의 저장된 접속 정보를 삭제할까요?`)) {
     list.splice(i, 1);
     setSavedConns(list);
   }
 });
 
 function saveCurrentConn() {
-  const list = getSavedConns();
-  const idx = list.findIndex(c => c.id === S.id);
-  // 같은 아이디로 다른 주소에서 접속해도 기존 주소를 덮어쓰지 않고 누적 저장
-  const prevServers = idx >= 0 ? (list[idx].servers || []) : [];
-  const servers = [...new Set([...S.serverList, ...prevServers])].slice(0, 6);
-  const entry = { id: S.id, servers, pw: btoa(encodeURIComponent(S.pw)) };
-  if (idx >= 0) list[idx] = entry; else list.unshift(entry);
+  localStorage.setItem('savedServer', S.server);
+  const list = getSavedConns().filter(c => c.id !== S.id);
+  list.unshift({ id: S.id, pw: btoa(encodeURIComponent(S.pw)) }); // 마지막에 쓴 계정이 맨 위
   setSavedConns(list);
-  // 다음 재접속 순환에도 누적된 주소 전체 사용
-  S.serverList = servers;
+}
+
+// 서버 주소 정리: http:// 와 끝의 / 를 떼고, 포트가 없으면 7777. 여러 개를 적었으면 '' (하나만 허용)
+function normServer(v) {
+  const s = String(v || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  if (!s || /[\s,;]/.test(s)) return '';
+  return s.includes(':') ? s : s + ':7777';
 }
 
 function doLogin() {
-  // 서버 주소: 쉼표로 여러 개 입력 가능 (유선/무선 등) — 끊기면 번갈아 재시도
-  const servers = $('#loginServer').value.split(',')
-    .map(s => s.trim().replace(/^https?:\/\//, '').replace(/\/+$/, ''))
-    .filter(Boolean)
-    .map(s => (s.includes(':') ? s : s + ':7777'));
+  const raw = $('#loginServer').value.trim();
+  const server = normServer(raw);
   const id = $('#loginId').value.trim();
   const pw = $('#loginPw').value;
-  if (!servers.length || !id) return loginFail('서버 주소와 아이디를 입력하세요.');
-  S.serverList = [...new Set(servers)];
-  S.serverIdx = 0;
-  S.server = S.serverList[0];
-  S.initialTriesLeft = S.serverList.length;
+  if (!raw || !id) return loginFail('서버 주소와 아이디를 입력하세요.');
+  if (!server) return loginFail('서버 주소는 하나만 입력하세요. (예: 10.112.120.40:7777)');
+  $('#loginServer').value = server;
+  S.server = server;
   S.id = id; S.pw = pw;
   $('#loginError').textContent = '';
   $('#loginBtn').disabled = true;
@@ -3701,7 +3850,9 @@ window.native.onDownloadProgress((d) => {
 // 다크 모드 복원
 if (localStorage.getItem('darkMode') === '1') document.body.classList.add('dark');
 
-// 저장된 로그인 정보 복원 (구버전 loginInfo → savedConns 마이그레이션 포함)
+// 저장된 로그인 정보 복원
+//  - 아주 예전 loginInfo(계정 하나) → savedConns
+//  - 0.9.x 의 계정별 서버 주소 목록(servers) → 서버 주소 하나(savedServer). 맨 앞이 마지막으로 접속한 주소
 try {
   const legacy = JSON.parse(localStorage.getItem('loginInfo'));
   if (legacy && legacy.server && !getSavedConns().length) {
@@ -3709,5 +3860,16 @@ try {
     localStorage.removeItem('loginInfo');
   }
 } catch (e) {}
+{
+  const list = getSavedConns();
+  if (list.some(c => c.servers)) {
+    if (!localStorage.getItem('savedServer')) {
+      const first = list.find(c => (c.servers || []).length);
+      if (first) localStorage.setItem('savedServer', normServer(first.servers[0]) || first.servers[0]);
+    }
+    setSavedConns(list.map(c => ({ id: c.id, pw: c.pw })));
+  }
+}
+$('#loginServer').value = localStorage.getItem('savedServer') || '';
 renderSavedConns();
 if (getSavedConns().length) applySavedConn(0);
