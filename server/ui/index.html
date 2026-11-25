@@ -2,171 +2,216 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>학교메신저 서버</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1 id="brandTitle">🏫 학교메신저 서버</h1>
-  <div class="row">
-    <button id="aboutBtn" class="mini" style="background:transparent;color:#dff2df;border-color:#7fb884">ℹ 정보</button>
+<header class="appbar">
+  <div class="brand">
+    <span class="logo"><span class="msi">school</span></span>
+    <h1 id="brandTitle">학교메신저 서버</h1>
+  </div>
+  <div class="appbar-right">
     <div id="statusBadge" class="badge off">중지됨</div>
+    <button id="aboutBtn" class="icon-btn" title="프로그램 정보"><span class="msi">info</span></button>
+    <button id="webLogoutBtn" class="icon-btn web-only" title="로그아웃"><span class="msi">logout</span></button>
   </div>
 </header>
 
 <div class="layout">
 <nav id="sideNav">
-  <div class="nav-item active" data-target="sec-status">🖥 서버 상태</div>
-  <div class="nav-item" data-target="sec-users">👤 사용자 관리</div>
-  <div class="nav-item" data-target="sec-signup">✍ 회원가입 요청 <span id="navSignupCnt" class="cnt-badge" style="display:none">0</span></div>
-  <div class="nav-item" data-target="sec-dept">🏷 부서 표시 순서</div>
-  <div class="nav-item" data-target="sec-data">🗄 데이터 관리</div>
-  <div class="nav-item" data-target="sec-log">📋 활동 로그</div>
-  <div class="nav-item" data-target="sec-update">⬆ 클라이언트 업데이트</div>
+  <div class="nav-item active" data-target="sec-status"><span class="msi">dns</span><span class="nav-lb">서버 상태</span></div>
+  <div class="nav-item" data-target="sec-users"><span class="msi">group</span><span class="nav-lb">사용자 관리</span></div>
+  <div class="nav-item" data-target="sec-signup"><span class="msi">person_add</span><span class="nav-lb">회원가입 요청</span> <span id="navSignupCnt" class="cnt-badge" style="display:none">0</span></div>
+  <div class="nav-item" data-target="sec-dept"><span class="msi">account_tree</span><span class="nav-lb">부서 표시 순서</span></div>
+  <div class="nav-item" data-target="sec-data"><span class="msi">database</span><span class="nav-lb">데이터 관리</span></div>
+  <div class="nav-item" data-target="sec-log"><span class="msi">receipt_long</span><span class="nav-lb">활동 로그</span></div>
+  <div class="nav-item" data-target="sec-update"><span class="msi">system_update</span><span class="nav-lb">프로그램 업데이트</span> <span id="navUpdDot" class="upd-dot" style="display:none"></span></div>
 </nav>
 <main>
   <section class="card" id="sec-status">
-    <h2>서버 상태</h2>
-    <div class="grid">
-      <div><label>접속 주소</label><div id="addrList" class="big">-</div></div>
-      <div><label>포트</label>
-        <div class="row">
-          <input id="portInput" type="number" min="1" max="65535" style="width:90px">
-          <button id="portBtn">변경</button>
-        </div>
+    <div class="card-head"><h2><span class="msi">dns</span>서버 상태</h2></div>
+    <div class="tiles">
+      <div class="tile"><label>접속 주소</label><div id="addrList" class="big">-</div></div>
+      <div class="tile"><label>등록 사용자</label><div id="userCount" class="big">0명</div></div>
+      <div class="tile"><label>현재 접속</label><div id="onlineCount" class="big">0명</div></div>
+      <div class="tile"><label>서버 버전</label><div id="verTile" class="big">-</div></div>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="schoolInput">학교 이름 <span class="hint-inline">제목줄·교직원 메신저에 표시</span></label>
+        <div class="row"><input id="schoolInput" placeholder="예: 금구중학교"><button id="schoolBtn" class="tonal">저장</button></div>
       </div>
-      <div><label>등록 사용자</label><div id="userCount" class="big">0명</div></div>
-      <div><label>현재 접속</label><div id="onlineCount" class="big">0명</div></div>
-      <div style="grid-column: span 2"><label>학교 이름 (제목표시줄·클라이언트에 표시)</label>
-        <div class="row">
-          <input id="schoolInput" placeholder="예: 금구중학교" style="width:180px">
-          <button id="schoolBtn">저장</button>
-        </div>
+      <div class="field">
+        <label for="portInput">포트 <span class="hint-inline">바꾸면 교직원 메신저 주소도 바꿔야 함</span></label>
+        <div class="row"><input id="portInput" type="number" min="1" max="65535" style="max-width:120px"><button id="portBtn" class="tonal">변경</button></div>
       </div>
     </div>
-    <label class="chk" style="margin-top:10px">
-      <input type="checkbox" id="autostartChk"> Windows 시작 시 서버 자동 실행
+    <label class="switch-row">
+      <span><b id="autostartLabel">Windows 시작 시 서버 자동 실행</b><small id="autostartHint">서버 PC 를 다시 켜도 메신저 서버가 알아서 켜집니다.</small></span>
+      <input type="checkbox" class="switch" id="autostartChk">
     </label>
-    <p class="hint">클라이언트에서 위 접속 주소 중 하나를 <b>서버 주소</b>로 입력하면 됩니다.
-      기본 관리자 계정: <b>admin / admin1234</b> (로그인 후 비밀번호를 꼭 변경하세요)</p>
+    <p class="hint">교직원 메신저 로그인 화면에 위 접속 주소 중 하나를 <b>서버 주소</b>로 입력하면 됩니다.
+      처음 관리자 계정: <b>admin / admin1234</b> (꼭 비밀번호를 바꾸세요)</p>
     <p class="hint">데이터 저장 위치: <span id="dataDir"></span></p>
   </section>
 
   <section class="card" id="sec-users">
-    <h2>사용자 관리
-      <span style="float:right;font-weight:normal">
-        <button id="csvExportBtn" class="mini">📤 엑셀용 CSV 내보내기</button>
-        <button id="csvImportBtn" class="mini">📥 엑셀/CSV 가져오기</button>
-      </span>
-    </h2>
-    <div id="csvResult" class="hint" style="margin:0 0 8px"></div>
-    <div class="row" style="margin-bottom:8px">
-      <input id="fId" placeholder="아이디(한글/영문/숫자)" style="width:140px">
-      <input id="fPw" placeholder="초기 비밀번호" style="width:110px">
-      <input id="fName" placeholder="이름" style="width:100px">
-      <input id="fDept" placeholder="부서 (쉼표로 여러 개)" style="width:150px" list="fDeptList" title="쉼표(,)로 구분해 여러 부서에 소속시킬 수 있습니다. 예: 1학년, 교과-국어">
-      <datalist id="fDeptList"></datalist>
-      <input id="fPos" placeholder="직위 (예: 담임)" style="width:110px">
-      <label class="chk"><input type="checkbox" id="fAdmin"> 관리자</label>
-      <button id="addBtn" class="primary">계정 추가</button>
+    <div class="card-head">
+      <h2><span class="msi">group</span>사용자 관리</h2>
+      <div class="card-actions">
+        <button id="csvImportBtn" class="outlined"><span class="msi">upload_file</span>엑셀/CSV 가져오기</button>
+        <button id="csvExportBtn" class="outlined"><span class="msi">download</span>엑셀용 CSV 내보내기</button>
+        <button id="addBtn" class="primary"><span class="msi">person_add</span>계정 추가</button>
+      </div>
     </div>
-    <details style="margin-bottom:10px">
-      <summary>여러 명 한꺼번에 등록 (한 줄에 한 명: 아이디,이름,부서,직위,비밀번호)</summary>
-      <textarea id="bulkText" rows="5" placeholder="hong01,홍길동,1학년,담임,1234&#10;kim02,김철수,교무부,부장,1234"></textarea>
-      <button id="bulkBtn">일괄 등록</button>
+    <div id="csvResult" class="hint" style="margin:0 0 8px"></div>
+    <div class="search-box"><span class="msi">search</span><input id="userSearch" placeholder="아이디·이름·부서·직위·과목·전화 검색"></div>
+    <div class="table-wrap">
+      <table id="userTable">
+        <thead>
+          <tr><th style="width:44px">상태</th><th>아이디</th><th>이름</th><th>부서</th><th>직위</th><th>담당 과목</th><th>사무실 전화</th><th>권한</th><th style="width:96px"></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <details class="bulk">
+      <summary><span class="msi">playlist_add</span>여러 명 한꺼번에 등록</summary>
+      <p class="hint">한 줄에 한 명: <b>아이디,이름,부서,직위,비밀번호</b> (뒤에 <b>,담당과목,사무실위치,사무실전화,핸드폰,이메일</b> 을 이어 써도 됩니다)</p>
+      <textarea id="bulkText" rows="5" placeholder="hong01,홍길동,1학년,교사,1234,국어,3층 학년실,062-000-0000&#10;kim02,김철수,교무부,부장,1234"></textarea>
+      <button id="bulkBtn" class="tonal">일괄 등록</button>
       <div id="bulkResult" class="hint"></div>
     </details>
-    <p class="hint">엑셀/CSV 형식: <b>아이디 | 이름 | 부서 | 직위 | 비밀번호</b> 열 순서 (비밀번호 생략 시 1234, 머리글 행은 자동 무시, 엑셀은 첫 번째 시트를 읽습니다)<br>
-      부서는 <b>세미콜론(;)</b>으로 여러 개 입력할 수 있습니다. 예: <b>1학년;교과-국어</b></p>
-    <input id="userSearch" placeholder="🔍 아이디/이름/부서/직위 검색" style="width:260px;margin-bottom:6px">
-    <table id="userTable">
-      <thead>
-        <tr><th>상태</th><th>아이디</th><th>이름</th><th>부서</th><th>직위</th><th>권한</th><th>관리</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+    <p class="hint">엑셀/CSV 열 순서: <b>아이디 | 이름 | 부서 | 직위 | 비밀번호 | 담당과목 | 사무실위치 | 사무실전화 | 핸드폰 | 이메일</b>
+      (비밀번호를 비우면 1234, 뒤쪽 세부 정보 열은 없어도 됨, 머리글 행은 자동 무시, 엑셀은 첫 번째 시트)<br>
+      부서는 <b>세미콜론(;)</b>으로 여러 개 넣을 수 있습니다. 예: <b>1학년;교과-국어</b></p>
   </section>
 
   <section class="card" id="sec-signup">
-    <h2>회원가입 요청 <span id="signupCnt" class="cnt-badge" style="display:none">0</span></h2>
-    <p class="hint" style="margin:0 0 8px">클라이언트 로그인 화면에서 접수된 가입 요청입니다. 승인하면 즉시 로그인할 수 있습니다.</p>
+    <div class="card-head"><h2><span class="msi">person_add</span>회원가입 요청 <span id="signupCnt" class="cnt-badge" style="display:none">0</span></h2></div>
+    <p class="hint" style="margin:0 0 10px">교직원 메신저 로그인 화면에서 들어온 가입 요청입니다. 승인하면 바로 로그인할 수 있습니다.</p>
     <div id="signupList"></div>
   </section>
 
   <section class="card" id="sec-dept">
-    <h2>부서(그룹) 표시 순서</h2>
-    <p class="hint" style="margin:0 0 8px">클라이언트 조직도에 표시되는 부서 순서를 지정합니다. 순서를 바꾸면 접속 중인 모든 클라이언트에 즉시 반영됩니다.</p>
+    <div class="card-head"><h2><span class="msi">account_tree</span>부서(그룹) 표시 순서</h2></div>
+    <p class="hint" style="margin:0 0 10px">교직원 메신저 조직도의 부서 순서입니다. 끌어 놓거나 ▲▼ 로 바꾸면 접속 중인 모든 메신저에 바로 반영됩니다.<br>
+      <b>교과-○○</b> 그룹은 교직원의 담당 과목으로 자동으로 만들어지며, 여기서 순서를 정할 수 있습니다.</p>
     <div id="deptOrderList" class="dept-order"></div>
   </section>
 
   <section class="card" id="sec-data">
-    <h2>데이터 관리 (쪽지 보관함)</h2>
-    <div class="grid">
-      <div><label>쪽지/채팅 보관 수</label><div id="stMsgCount" class="big">-</div></div>
-      <div><label>첨부파일</label><div id="stFiles" class="big">-</div></div>
-      <div><label>DB 크기</label><div id="stDb" class="big">-</div></div>
-      <div><label>예약 쪽지</label><div id="stSched" class="big">-</div></div>
+    <div class="card-head"><h2><span class="msi">database</span>데이터 관리 (쪽지 보관함)</h2></div>
+    <div class="tiles">
+      <div class="tile"><label>쪽지/채팅 보관 수</label><div id="stMsgCount" class="big">-</div></div>
+      <div class="tile"><label>첨부파일</label><div id="stFiles" class="big">-</div></div>
+      <div class="tile"><label>DB 크기</label><div id="stDb" class="big">-</div></div>
+      <div class="tile"><label>예약 쪽지</label><div id="stSched" class="big">-</div></div>
     </div>
-    <div class="row" style="margin-top:12px">
-      <label>보관 기간:</label>
-      <input id="retentionInput" type="number" min="0" max="3650" style="width:80px"> 일
-      <span class="hint" style="margin:0">(0 = 무제한, 기간이 지난 쪽지·채팅·첨부파일 자동 삭제, 6시간마다 자동 정리)</span>
-      <button id="retentionBtn">저장</button>
-      <button id="cleanupBtn" class="primary">지금 정리</button>
+    <div class="setting-line">
+      <div class="sl-label"><b>보관 기간</b><small>0 = 무제한. 기간이 지난 쪽지·채팅·첨부파일은 6시간마다 자동 삭제</small></div>
+      <div class="row">
+        <input id="retentionInput" type="number" min="0" max="3650" style="width:96px"> 일
+        <button id="retentionBtn" class="tonal">저장</button>
+        <button id="cleanupBtn" class="outlined">지금 정리</button>
+      </div>
     </div>
     <div id="cleanupResult" class="hint"></div>
-    <div class="row" style="margin-top:12px">
-      <label><b>백업 (서버 이전용):</b></label>
-      <button id="backupExportBtn">📤 백업 내보내기</button>
-      <button id="backupImportBtn" class="danger">📥 백업 복원</button>
-      <span class="hint" style="margin:0">쪽지·계정·첨부파일 전체를 폴더로 내보내고, 새 서버 PC에서 복원할 수 있습니다.</span>
+    <div class="setting-line">
+      <div class="sl-label"><b>백업 (서버 이전용)</b><small>쪽지·계정·첨부파일 전체를 폴더로 내보내고, 새 서버에서 복원합니다</small></div>
+      <div class="row">
+        <button id="backupExportBtn" class="tonal"><span class="msi">backup</span>백업 내보내기</button>
+        <button id="backupImportBtn" class="outlined danger"><span class="msi">settings_backup_restore</span>백업 복원</button>
+      </div>
     </div>
     <div id="backupResult" class="hint"></div>
-    <div class="row" style="margin-top:8px">
-      <label><b>데이터 저장 위치:</b></label>
-      <span id="dataDirNow" class="hint" style="margin:0;word-break:break-all">-</span>
-      <button id="dataDirBtn">📁 위치 변경</button>
+    <div class="setting-line">
+      <div class="sl-label"><b>데이터 저장 위치</b><small id="dataDirNow" style="word-break:break-all">-</small></div>
+      <div class="row"><button id="dataDirBtn" class="outlined"><span class="msi">folder_open</span>위치 변경</button></div>
     </div>
   </section>
 
   <section class="card" id="sec-log">
-    <h2>활동 로그
-      <span style="float:right;font-weight:normal">
-        <button id="logRefreshBtn" class="mini">🔄 새로고침</button>
-        <button id="logOpenBtn" class="mini">📂 로그 파일 열기</button>
-      </span>
-    </h2>
+    <div class="card-head">
+      <h2><span class="msi">receipt_long</span>활동 로그</h2>
+      <div class="card-actions">
+        <button id="logRefreshBtn" class="text-btn"><span class="msi">refresh</span>새로고침</button>
+        <button id="logOpenBtn" class="text-btn"><span class="msi">description</span><span id="logOpenLb">로그 파일 열기</span></button>
+      </div>
+    </div>
     <div id="logList" class="log-list"></div>
   </section>
 
   <section class="card" id="sec-update">
-    <h2>클라이언트 자동 업데이트</h2>
-    <div class="row">
-      <span>등록된 버전: <b id="updVersion">없음</b></span>
-      <button id="updRegisterBtn" class="primary">새 클라이언트 설치파일 등록</button>
+    <div class="card-head">
+      <h2><span class="msi">system_update</span>프로그램 업데이트</h2>
+      <div class="card-actions"><button id="updCheckBtn" class="tonal"><span class="msi">sync</span>지금 확인</button></div>
     </div>
-    <p class="hint">새 버전의 클라이언트 설치파일(.exe)을 등록해 두면, 구버전 클라이언트가 로그인할 때
-      자동으로 새 버전을 안내하고 서버에서 내려받아 설치할 수 있습니다.<br>
-      파일 이름에 버전이 있어야 합니다 (예: SchoolMessenger-Client-Setup-1.5.0.exe)</p>
+    <div class="tiles">
+      <div class="tile"><label>서버 (지금)</label><div id="updCur" class="big">-</div></div>
+      <div class="tile"><label>GitHub 최신</label><div id="updLatest" class="big">-</div></div>
+      <div class="tile"><label>클라이언트 배포 버전</label><div id="updVersion" class="big">없음</div></div>
+      <div class="tile"><label>마지막 확인</label><div id="updLast" class="big">-</div></div>
+    </div>
+    <div id="updMsg" class="notice-box" style="display:none"></div>
+    <div id="updProgress" class="progress" style="display:none"><div class="progress-bar"><i></i></div><span></span></div>
+    <div id="updPendingRow" class="pending-row" style="display:none">
+      <span class="msi">new_releases</span>
+      <span id="updPendingText"></span>
+      <button id="updInstallBtn" class="primary"><span class="msi">install_desktop</span>서버 업데이트 설치</button>
+    </div>
+    <label class="switch-row">
+      <span><b>GitHub 자동 업데이트</b><small>6시간마다 새 버전을 확인합니다. 새 클라이언트는 받아서 바로 배포하고(교직원 메신저가 서버에서 받아 감), 새 서버는 받아 둡니다.</small></span>
+      <input type="checkbox" class="switch" id="updEnabled">
+    </label>
+    <label class="switch-row">
+      <span><b>서버 자동 설치</b><small>받아 둔 새 서버 버전을 접속한 사람이 아무도 없을 때 자동으로 설치하고 다시 시작합니다. 끄면 [서버 업데이트 설치]를 눌러야 설치됩니다.</small></span>
+      <input type="checkbox" class="switch" id="updAuto">
+    </label>
+    <div class="form-grid">
+      <div class="field">
+        <label for="updRepo">GitHub 저장소 <span class="hint-inline">소유자/저장소이름</span></label>
+        <input id="updRepo" placeholder="jjiseok26/schoolmessenger">
+      </div>
+      <div class="field">
+        <label for="updToken">GitHub 토큰 <span class="hint-inline">비공개 저장소일 때만 (읽기 전용)</span></label>
+        <div class="row"><input id="updToken" type="password" autocomplete="off" placeholder="공개 저장소면 비워 두세요"><button id="updTokenClear" class="text-btn danger" style="display:none">토큰 지우기</button></div>
+      </div>
+    </div>
+    <div class="row" style="justify-content:flex-end;margin-top:8px"><button id="updSaveBtn" class="tonal">설정 저장</button></div>
+    <div class="sub-block">
+      <div class="sl-label"><b>클라이언트 설치파일 직접 등록</b><small>인터넷이 막혀 GitHub 에 접속할 수 없을 때: 새 클라이언트 설치파일(.exe)을 직접 올려 배포합니다. 파일 이름에 버전이 있어야 합니다 (예: SchoolMessenger-Client-Setup-1.5.0.exe)</small></div>
+      <button id="updRegisterBtn" class="outlined"><span class="msi">upload</span>설치파일 선택</button>
+    </div>
   </section>
 </main>
 </div>
 
-<!-- 계정 수정 모달 -->
+<!-- 계정 추가/수정 모달 -->
 <div id="editModal" class="modal-bg" style="display:none">
-  <div class="modal">
-    <h2>계정 수정 — <span id="editId"></span></h2>
-    <label>이름</label>
-    <input id="eName">
-    <label>부서/학년 <span class="hint-inline">(쉼표로 여러 부서 소속 가능)</span></label>
-    <input id="eDept" placeholder="예: 1학년, 교과-국어">
-    <label>직위</label>
-    <input id="ePos">
-    <label class="chk" style="margin-top:10px"><input type="checkbox" id="eAdmin"> 관리자 권한 (공지 작성 가능)</label>
-    <label>새 비밀번호 <span class="hint-inline">(변경할 때만 입력, 비워두면 유지)</span></label>
-    <input id="ePw" type="password" placeholder="비워두면 기존 비밀번호 유지">
+  <div class="modal wide">
+    <h2 id="editTitle">계정 수정</h2>
+    <div class="form-grid">
+      <div class="field"><label>아이디 *</label><input id="eId" placeholder="한글/영문/숫자 2~30자"></div>
+      <div class="field"><label id="ePwLabel">새 비밀번호</label><input id="ePw" type="password" autocomplete="new-password" placeholder="비워 두면 그대로"></div>
+      <div class="field"><label>이름 *</label><input id="eName"></div>
+      <div class="field"><label>부서/학년 <span class="hint-inline">쉼표로 여러 개</span></label><input id="eDept" placeholder="예: 1학년, 교과-국어" list="fDeptList"></div>
+      <div class="field"><label>직위</label><input id="ePos" placeholder="예: 교사, 부장"></div>
+      <div class="field"><label>담당 과목 <span class="hint-inline">교과 그룹 자동 소속</span></label><input id="eSubject" placeholder="예: 수학"></div>
+      <div class="field"><label>사무실 위치</label><input id="eOffice" placeholder="예: 2층 교무실"></div>
+      <div class="field"><label>사무실 전화</label><input id="ePhone" placeholder="예: 062-000-0000"></div>
+      <div class="field"><label>핸드폰</label><input id="eMobile" placeholder="예: 010-0000-0000"></div>
+      <div class="field"><label>이메일</label><input id="eEmail" placeholder="예: teacher@school.kr"></div>
+    </div>
+    <datalist id="fDeptList"></datalist>
+    <label class="switch-row" style="margin-top:6px">
+      <span><b>관리자 권한</b><small>메신저에서 계정 관리·가입 승인·공지 관리, 웹 관리 화면 로그인</small></span>
+      <input type="checkbox" class="switch" id="eAdmin">
+    </label>
+    <div id="editError" class="error"></div>
     <div class="modal-btns">
-      <button id="editCancel">취소</button>
+      <button id="editCancel" class="text-btn">취소</button>
       <button id="editSave" class="primary">저장</button>
     </div>
   </div>
@@ -175,10 +220,11 @@
 <!-- 프로그램 정보 모달 -->
 <div id="aboutModal" class="modal-bg" style="display:none">
   <div class="modal" style="text-align:center">
-    <h2 style="font-size:18px">🏫 학교메신저 서버</h2>
+    <div class="about-logo"><span class="msi">school</span></div>
+    <h2 style="text-align:center">학교메신저 서버</h2>
     <p style="margin:6px 0;font-size:14px">버전 <b id="aboutVersion">-</b></p>
     <p class="hint" style="margin:6px 0">교내망 전용 학교 메신저 — 서버 관리 프로그램<br>쪽지 · 대화 · 채팅방 · 공지 · 설문 · 파일 공유</p>
-    <p style="margin:12px 0 4px;font-size:13px;color:#556">ⓒ jiseok. All rights reserved.</p>
+    <p class="hint" style="margin:12px 0 4px">ⓒ jiseok. All rights reserved.</p>
     <div class="modal-btns" style="justify-content:center">
       <button id="aboutClose" class="primary">닫기</button>
     </div>
@@ -188,16 +234,17 @@
 <!-- 학교 이름 첫 설정 모달 -->
 <div id="schoolModal" class="modal-bg" style="display:none">
   <div class="modal">
-    <h2>🏫 학교 이름 설정</h2>
-    <p class="hint" style="margin:0 0 10px">학교 이름을 입력하면 서버 제목표시줄과 교직원 메신저 화면에 표시됩니다.<br>나중에 서버 상태 카드에서 언제든지 변경할 수 있습니다.</p>
+    <h2>학교 이름 설정</h2>
+    <p class="hint" style="margin:0 0 12px">학교 이름을 입력하면 서버 제목줄과 교직원 메신저 화면에 표시됩니다.<br>나중에 서버 상태 카드에서 언제든지 바꿀 수 있습니다.</p>
     <input id="schoolFirstInput" placeholder="예: 금구중학교">
     <div class="modal-btns">
-      <button id="schoolSkip">나중에</button>
+      <button id="schoolSkip" class="text-btn">나중에</button>
       <button id="schoolSave" class="primary">저장</button>
     </div>
   </div>
 </div>
 
+<script src="web-api.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -54,6 +54,9 @@ function deriveAesKey(ecdh, clientPubB64) {
   return crypto.createHash('sha256').update(secret).digest();
 }
 
+// 사용자 세부 정보 필드와 최대 길이 (내 정보·서버 관리 화면·엑셀 가져오기 공용)
+const USER_DETAIL_FIELDS = { office: 50, subject: 50, phone: 30, mobile: 30, email: 60 };
+
 // 부서 문자열/배열 → 부서 배열 (쉼표/세미콜론으로 여러 부서 소속 가능)
 function parseDepts(v) {
   const arr = Array.isArray(v) ? v : String(v || '').split(/[,;]/);
@@ -102,6 +105,9 @@ class MessengerServer {
     this.wss = null;
     this.port = null;
     this.schoolName = '';
+    this.version = '';          // 서버 프로그램 버전 (실행 환경이 넣어 줌, /health 로 확인 가능)
+    this.updateRepoPublic = ''; // 클라이언트가 GitHub 에서 직접 새 버전을 확인할 공개 저장소 (owner/repo)
+    this.httpHooks = [];        // start() 때 추가로 붙일 HTTP 경로 (리눅스 웹 관리 화면 등): (app) => {}
     this._saveTimer = null;
     this.onStatusChange = null; // 관리 UI 갱신 콜백
   }
@@ -255,7 +261,7 @@ class MessengerServer {
         next();
       });
 
-      app.get('/health', (req, res) => res.json({ ok: true, name: 'school-messenger' }));
+      app.get('/health', (req, res) => res.json({ ok: true, name: 'school-messenger', version: this.version || '' }));
 
       // 클라이언트 자동 업데이트: 등록된 최신 설치파일 제공
       app.get('/client-update', (req, res) => {
@@ -328,6 +334,8 @@ class MessengerServer {
           (inline && type ? 'inline' : 'attachment') + "; filename*=UTF-8''" + encodeURIComponent(name));
         fs.createReadStream(file).pipe(res);
       });
+
+      for (const hook of this.httpHooks) hook(app);
 
       this.httpServer = http.createServer(app);
       this.wss = new WebSocketServer({ server: this.httpServer, path: '/ws' });
@@ -693,6 +701,7 @@ class MessengerServer {
       case 'cancel_scheduled_notice': return this._doCancelScheduledNotice(ws, msg);
       case 'save_group': return this._doSaveGroup(ws, msg);
       case 'delete_group': return this._doDeleteGroup(ws, msg);
+      case 'reorder_groups': return this._doReorderGroups(ws, msg);
       case 'set_dept_order': return this._doSetDeptOrder(ws, msg);
       case 'set_user_order': return this._doSetUserOrder(ws, msg);
       case 'rename_dept': return this._doRenameDept(ws, msg);
@@ -746,6 +755,7 @@ class MessengerServer {
       token,
       schoolName: this.schoolName || '',
       clientUpdate: this.clientUpdate ? this.clientUpdate.version : '',
+      updateRepo: this.updateRepoPublic || '',
       user: this._publicUser(user),
       users: this.db.users.map(u => this._publicUser(u)),
       messages: recent,
@@ -896,6 +906,23 @@ class MessengerServer {
     const dst = path.join(this.updateDir, 'client-setup-' + version + '.exe');
     fs.copyFileSync(srcPath, dst);
     this.clientUpdate = { version, file: dst };
+    return { version, size: fs.statSync(dst).size };
+  }
+
+  // GitHub 에서 내려받은 클라이언트 설치파일을 배포용으로 등록 (복사 대신 이동, 기존 파일 정리)
+  adoptClientUpdate(file, version) {
+    if (!/^\d+\.\d+\.\d+$/.test(String(version))) throw new Error('버전 형식이 올바르지 않습니다: ' + version);
+    const dst = path.join(this.updateDir, 'client-setup-' + version + '.exe');
+    for (const f of fs.readdirSync(this.updateDir)) {
+      const p = path.join(this.updateDir, f);
+      if (/\.exe$/i.test(f) && path.resolve(p) !== path.resolve(file)) { try { fs.unlinkSync(p); } catch (e) {} }
+    }
+    if (path.resolve(file) !== path.resolve(dst)) {
+      try { fs.renameSync(file, dst); }
+      catch (e) { fs.copyFileSync(file, dst); try { fs.unlinkSync(file); } catch (e2) {} } // 다른 디스크면 복사
+    }
+    this.clientUpdate = { version, file: dst };
+    this.log(`클라이언트 v${version} 설치파일 등록 (GitHub)`);
     return { version, size: fs.statSync(dst).size };
   }
 
@@ -1233,11 +1260,9 @@ class MessengerServer {
       u.depts = parseDepts(msg.dept);
       u.dept = u.depts[0];
     }
-    u.office = String(msg.office || '').trim().slice(0, 50);
-    u.subject = String(msg.subject || '').trim().slice(0, 50);
-    u.phone = String(msg.phone || '').trim().slice(0, 30);
-    u.mobile = String(msg.mobile || '').trim().slice(0, 30);
-    u.email = String(msg.email || '').trim().slice(0, 60);
+    const details = {};
+    for (const f of Object.keys(USER_DETAIL_FIELDS)) details[f] = msg[f] || '';
+    this._applyUserDetails(u, details);
     this._saveSoon();
     this._broadcastUsers();
     this._send(ws, { type: 'profile_updated' });
@@ -1487,6 +1512,20 @@ class MessengerServer {
     this._send(ws, { type: 'group_deleted', id: msg.id });
   }
 
+  // 내 사용자 그룹 순서 바꾸기 — ids 순서대로, 목록에 없는 그룹은 기존 순서대로 뒤에 둔다
+  // (다른 사람의 그룹은 배열 속 자리를 그대로 둔 채 내 그룹 자리에만 새 순서를 채운다)
+  _doReorderGroups(ws, msg) {
+    const ids = (Array.isArray(msg.ids) ? msg.ids.map(String) : []).slice(0, 500);
+    const mine = this.db.userGroups.filter(g => g.owner === ws.userId);
+    if (mine.length < 2) return;
+    const rank = (g) => { const i = ids.indexOf(g.id); return i < 0 ? 1e6 + mine.indexOf(g) : i; };
+    const sorted = [...mine].sort((a, b) => rank(a) - rank(b));
+    let k = 0;
+    this.db.userGroups = this.db.userGroups.map(g => (g.owner === ws.userId ? sorted[k++] : g));
+    this._saveSoon();
+    this._send(ws, { type: 'groups_reordered', ids: sorted.map(g => g.id) });
+  }
+
   // ---------- 클라이언트에서의 조직 관리 (관리자 권한 사용자) ----------
   _adminResult(ws, action, fn) {
     if (!this._requireAdmin(ws)) {
@@ -1564,7 +1603,14 @@ class MessengerServer {
     return this.db.users.map(u => this._publicUser(u));
   }
 
-  addUser({ id, name, dept, position, pw, admin }) {
+  // 세부 정보(사무실·과목·전화·핸드폰·이메일) 반영 — 넘어온 항목만 바꾼다
+  _applyUserDetails(u, d) {
+    for (const [f, max] of Object.entries(USER_DETAIL_FIELDS)) {
+      if (d && d[f] !== undefined) u[f] = String(d[f] ?? '').trim().slice(0, max);
+    }
+  }
+
+  addUser({ id, name, dept, position, pw, admin, ...details }) {
     id = String(id || '').trim();
     name = String(name || '').trim();
     if (!/^[a-zA-Z0-9가-힣_.-]{2,30}$/.test(id)) throw new Error('아이디는 한글/영문/숫자 2~30자여야 합니다: ' + id);
@@ -1572,25 +1618,28 @@ class MessengerServer {
     if (this.db.users.some(u => u.id === id)) throw new Error('이미 존재하는 아이디입니다: ' + id);
     const salt = newId();
     const depts = parseDepts(dept);
-    this.db.users.push({
+    const u = {
       id, name,
       dept: depts[0], depts,
       position: String(position || '').trim(),
       admin: !!admin,
       salt, pw: hashPw(String(pw || '1234'), salt)
-    });
+    };
+    this._applyUserDetails(u, details);
+    this.db.users.push(u);
     this._saveSoon();
     this.log(`계정 추가: ${name}(${id})`);
     this._broadcastUsers();
   }
 
-  updateUser(id, { name, dept, position, admin }) {
+  updateUser(id, { name, dept, position, admin, ...details }) {
     const u = this.db.users.find(x => x.id === id);
     if (!u) throw new Error('사용자가 없습니다.');
     if (name !== undefined) u.name = String(name).trim() || u.name;
     if (dept !== undefined) { u.depts = parseDepts(dept); u.dept = u.depts[0]; }
     if (position !== undefined) u.position = String(position).trim();
     if (admin !== undefined && !(u.id === 'admin' && !admin)) u.admin = !!admin;
+    this._applyUserDetails(u, details);
     this._saveSoon();
     this.log(`계정 수정: ${u.name}(${id})`);
     this._broadcastUsers();
@@ -1626,6 +1675,11 @@ class MessengerServer {
     this._broadcastUsers();
   }
 
+  checkPassword(u, pw) {
+    const a = Buffer.from(hashPw(String(pw || ''), u.salt)), b = Buffer.from(String(u.pw || ''));
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
   resetPw(id, newPw) {
     const u = this.db.users.find(x => x.id === id);
     if (!u) throw new Error('사용자가 없습니다.');
@@ -1634,14 +1688,14 @@ class MessengerServer {
     this._saveSoon();
   }
 
-  // "아이디,이름,부서,직위[,비밀번호]" 형식 여러 줄 일괄 등록
+  // "아이디,이름,부서,직위[,비밀번호,담당과목,사무실위치,사무실전화,핸드폰,이메일]" 형식 여러 줄 일괄 등록
   bulkAdd(text) {
     const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     let ok = 0; const errors = [];
     for (const line of lines) {
-      const [id, name, dept, position, pw] = line.split(',').map(s => (s || '').trim());
+      const [id, name, dept, position, pw, subject, office, phone, mobile, email] = line.split(',').map(s => (s || '').trim());
       try {
-        this.addUser({ id, name, dept, position, pw: pw || '1234', admin: false });
+        this.addUser({ id, name, dept, position, pw: pw || '1234', admin: false, subject, office, phone, mobile, email });
         ok++;
       } catch (e) { errors.push(line + ' → ' + e.message); }
     }

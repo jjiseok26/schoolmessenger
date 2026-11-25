@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('native', {
   setAutostart: (on) => ipcRenderer.invoke('set-autostart', on),
   getVersion: () => ipcRenderer.invoke('get-version'),
   downloadUpdate: (url, version) => ipcRenderer.invoke('download-update', url, version),
+  checkGithubUpdate: (repo) => ipcRenderer.invoke('check-github-update', repo),
   getUpdateReady: () => ipcRenderer.invoke('get-update-ready'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   onUpdateReady: (cb) => ipcRenderer.on('update-ready', (e, d) => cb(d)),

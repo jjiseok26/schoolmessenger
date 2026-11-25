@@ -10,12 +10,14 @@
 <!-- 로그인 화면 -->
 <div id="loginView" class="login-wrap">
   <div class="login-card">
-    <h1>🏫 학교메신저</h1>
+    <div class="login-logo"><span class="msi">school</span></div>
+    <h1>학교메신저</h1>
+    <p class="login-sub">교직원 계정으로 로그인하세요</p>
     <div id="savedConnRow" style="display:none">
       <label>저장된 접속 정보</label>
       <div class="saved-conn-row">
         <select id="savedConnSel"></select>
-        <button id="savedConnDel" title="선택한 접속 정보 삭제">✕</button>
+        <button id="savedConnDel" title="선택한 접속 정보 삭제"><span class="msi">delete</span></button>
       </div>
     </div>
     <label>서버 주소 <span class="sub">(유선/무선 등 여러 개는 쉼표로)</span></label>
@@ -26,7 +28,7 @@
     <input id="loginPw" type="password" placeholder="비밀번호">
     <label class="chk"><input type="checkbox" id="loginSave" checked> 접속 정보 저장</label>
     <button id="loginBtn" class="primary big">로그인</button>
-    <button id="signupBtn" class="big" style="margin-top:8px">✍ 회원가입 요청</button>
+    <button id="signupBtn" class="big text-big" style="margin-top:8px"><span class="msi">person_add</span>회원가입 요청</button>
     <div id="loginError" class="error"></div>
     <div class="copyright">ⓒ jiseok</div>
   </div>
@@ -35,7 +37,7 @@
 <!-- 회원가입 요청 모달 -->
 <div id="signupModal" class="modal-bg" style="display:none">
   <div class="modal">
-    <h2>✍ 회원가입 요청</h2>
+    <h2>회원가입 요청</h2>
     <p class="su-hint">요청을 보내면 관리자 승인 후 로그인할 수 있습니다. <b>*</b> 표시는 필수 입력입니다.</p>
     <div class="su-grid">
       <div><label>아이디 *</label><input id="suId" placeholder="한글/영문/숫자 2~30자"></div>
@@ -60,7 +62,7 @@
 <!-- 메인 화면 -->
 <div id="mainView" class="main-wrap" style="display:none">
   <header>
-    <div class="brand">🏫 학교메신저</div>
+    <div class="brand"><span class="brand-logo"><span class="msi">school</span></span><span id="brandName">학교메신저</span></div>
     <div id="connBanner" class="conn-banner" style="display:none">서버 연결이 끊어졌습니다. 재접속 중…</div>
     <div class="me">
       <span id="myInfo"></span>
@@ -70,18 +72,18 @@
         <option value="class">🔴 수업중</option>
         <option value="meeting">🟠 회의중</option>
       </select>
-      <button id="signupMgrBtn" class="ghost" title="회원가입 요청 승인" style="display:none"><span class="ic">🔔</span><span class="lb">가입요청</span> <span id="signupBadge" class="cnt" style="display:none">0</span></button>
-      <button id="dlDirBtn" class="ghost" title="받은 파일 폴더 열기"><span class="ic">📂</span><span class="lb">받은 폴더</span></button>
-      <button id="settingsBtn" class="ghost" title="설정"><span class="ic">⚙</span><span class="lb">설정</span></button>
-      <button id="profileBtn" class="ghost" title="내 정보"><span class="ic">👤</span><span class="lb">내 정보</span></button>
-      <button id="aboutBtn" class="ghost" title="정보"><span class="ic">ℹ</span><span class="lb">정보</span></button>
-      <button id="logoutBtn" class="ghost" title="로그아웃"><span class="ic">🚪</span><span class="lb">로그아웃</span></button>
+      <button id="signupMgrBtn" class="ghost" title="회원가입 요청 승인" style="display:none"><span class="ic"><span class="msi">how_to_reg</span></span><span class="lb">가입요청</span> <span id="signupBadge" class="cnt" style="display:none">0</span></button>
+      <button id="dlDirBtn" class="ghost" title="받은 파일 폴더 열기"><span class="ic"><span class="msi">folder_open</span></span><span class="lb">받은 폴더</span></button>
+      <button id="settingsBtn" class="ghost" title="설정"><span class="ic"><span class="msi">settings</span></span><span class="lb">설정</span></button>
+      <button id="profileBtn" class="ghost" title="내 정보"><span class="ic"><span class="msi">account_circle</span></span><span class="lb">내 정보</span></button>
+      <button id="aboutBtn" class="ghost" title="정보"><span class="ic"><span class="msi">info</span></span><span class="lb">정보</span></button>
+      <button id="logoutBtn" class="ghost" title="로그아웃"><span class="ic"><span class="msi">logout</span></span><span class="lb">로그아웃</span></button>
     </div>
   </header>
   <!-- 새 버전 준비 안내 (헤더 아래 한 줄) -->
   <div id="updateBanner" class="update-banner" style="display:none">
-    <span>🆕 새 버전 <b id="updateVersion"></b>이(가) 준비되었습니다. 재시작하면 바로 적용됩니다.</span>
-    <button id="updateRestartBtn" class="primary">🔄 지금 재시작하여 업데이트</button>
+    <span class="msi">system_update</span><span>새 버전 <b id="updateVersion"></b>이(가) 준비되었습니다. 재시작하면 바로 적용됩니다.</span>
+    <button id="updateRestartBtn" class="primary">지금 재시작하여 업데이트</button>
     <button id="updateLaterBtn" class="ghost" title="닫아도 프로그램을 종료할 때 자동으로 설치됩니다">나중에</button>
   </div>
 
@@ -89,11 +91,12 @@
     <!-- 왼쪽: 조직도 / 사용자 그룹 -->
     <aside>
       <div class="side-tabs">
-        <button class="side-tab active" data-side="org">조직도</button>
-        <button class="side-tab" data-side="groups">사용자 그룹</button>
+        <button class="side-tab active" data-side="org"><span class="msi">account_tree</span>조직도</button>
+        <button class="side-tab" data-side="groups"><span class="msi">groups</span>사용자 그룹</button>
       </div>
       <div class="search-wrap">
-        <input id="searchInput" placeholder="🔍 이름/부서 검색">
+        <span class="msi search-ic">search</span>
+        <input id="searchInput" placeholder="이름·부서 검색">
         <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
       </div>
       <!-- 접속 상태로 조직도 거르기 -->
@@ -106,50 +109,52 @@
         <label class="chk" style="margin:0"><input type="checkbox" id="treeSelAll"> 전체 선택</label>
         <span id="treeSelCount" class="sel-count"></span>
         <span class="spacer"></span>
-        <button id="treeSelMsg" style="display:none" title="선택한 사람들에게 쪽지">✉</button>
-        <button id="treeSelGroup" style="display:none" title="선택한 사람들로 그룹 만들기">👥</button>
-        <button id="treeSelClear" style="display:none" title="선택 해제">✕</button>
+        <button id="treeSelMsg" style="display:none" title="선택한 사람들에게 쪽지"><span class="msi">mail</span></button>
+        <button id="treeSelGroup" style="display:none" title="선택한 사람들로 그룹 만들기"><span class="msi">group_add</span></button>
+        <button id="treeSelClear" style="display:none" title="선택 해제"><span class="msi">close</span></button>
       </div>
       <div id="orgTree" class="org-tree"></div>
       <div id="groupPane" class="org-tree" style="display:none">
-        <button id="groupAddBtn" class="primary" style="width:100%;margin-bottom:8px" title="그룹 만들기"><span class="ic">➕</span><span class="lb">그룹 만들기</span></button>
+        <button id="groupAddBtn" class="primary" style="width:100%;margin-bottom:8px" title="그룹 만들기"><span class="msi">add</span><span>그룹 만들기</span></button>
         <div id="groupList"></div>
       </div>
-      <button id="orgManageBtn" style="display:none;width:100%" title="조직/사용자 관리"><span class="ic">⚙</span><span class="lb">조직/사용자 관리</span></button>
+      <button id="orgManageBtn" style="display:none;width:100%" title="조직/사용자 관리"><span class="msi">manage_accounts</span><span>조직/사용자 관리</span></button>
       <div class="aside-hint">이름 두 번 클릭: 대화 / 우클릭: 메뉴</div>
     </aside>
 
     <!-- 오른쪽: 콘텐츠 -->
     <section class="content">
       <nav class="tabs">
-        <button class="tab active" data-tab="notice" title="공지사항"><span class="ic">📢</span><span class="lb">공지사항</span> <span id="noticeBadge" class="cnt" style="display:none">0</span></button>
-        <button class="tab" data-tab="inbox" title="받은쪽지"><span class="ic">✉</span><span class="lb">받은쪽지</span> <span id="inboxBadge" class="cnt" style="display:none">0</span></button>
-        <button class="tab" data-tab="sent" title="보낸쪽지"><span class="ic">📤</span><span class="lb">보낸쪽지</span></button>
-        <button class="tab" data-tab="chat" title="대화"><span class="ic">💬</span><span class="lb">대화</span></button>
-        <button class="tab" data-tab="rooms" title="채팅방"><span class="ic">👥</span><span class="lb">채팅방</span> <span id="roomBadge" class="cnt" style="display:none">0</span></button>
+        <button class="tab active" data-tab="notice" title="공지사항"><span class="msi tab-ic">campaign</span><span class="lb">공지사항</span> <span id="noticeBadge" class="cnt" style="display:none">0</span></button>
+        <button class="tab" data-tab="inbox" title="받은쪽지"><span class="msi tab-ic">inbox</span><span class="lb">받은쪽지</span> <span id="inboxBadge" class="cnt" style="display:none">0</span></button>
+        <button class="tab" data-tab="sent" title="보낸쪽지"><span class="msi tab-ic">send</span><span class="lb">보낸쪽지</span></button>
+        <button class="tab" data-tab="chat" title="대화"><span class="msi tab-ic">chat</span><span class="lb">대화</span></button>
+        <button class="tab" data-tab="rooms" title="채팅방"><span class="msi tab-ic">forum</span><span class="lb">채팅방</span> <span id="roomBadge" class="cnt" style="display:none">0</span></button>
         <div class="spacer"></div>
-        <button id="pollWriteBtn" class="ghost" style="display:none" title="설문 만들기"><span class="ic">📊</span><span class="lb">설문 만들기</span></button>
-        <button id="noticeWriteBtn" class="ghost" style="display:none" title="공지 쓰기"><span class="ic">📝</span><span class="lb">공지 쓰기</span></button>
-        <button id="composeBtn" class="primary" title="쪽지 보내기"><span class="ic">✉</span><span class="lb">쪽지 보내기</span></button>
+        <button id="pollWriteBtn" class="ghost" style="display:none" title="설문 만들기"><span class="ic"><span class="msi">ballot</span></span><span class="lb">설문 만들기</span></button>
+        <button id="noticeWriteBtn" class="ghost" style="display:none" title="공지 쓰기"><span class="ic"><span class="msi">edit_note</span></span><span class="lb">공지 쓰기</span></button>
+        <button id="composeBtn" class="compose-fab" title="쪽지 보내기"><span class="msi">edit</span><span class="lb">쪽지 보내기</span></button>
       </nav>
 
       <div id="tab-inbox" class="tab-body" style="display:none">
         <div class="list-toolbar">
           <div class="search-wrap">
-            <input id="inboxSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/보낸 사람 검색">
+            <span class="msi search-ic">search</span>
+            <input id="inboxSearch" class="list-search-inline" placeholder="쪽지 내용/보낸 사람 검색">
             <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
           </div>
-          <button id="inboxComposeBtn" class="primary">✉ 쪽지 보내기</button>
+          <button id="inboxComposeBtn" class="primary"><span class="msi">edit</span>쪽지 보내기</button>
         </div>
         <div id="inboxList" class="msg-list"></div>
       </div>
       <div id="tab-sent" class="tab-body" style="display:none">
         <div class="list-toolbar">
           <div class="search-wrap">
-            <input id="sentSearch" class="list-search-inline" placeholder="🔍 쪽지 내용/받는 사람 검색">
+            <span class="msi search-ic">search</span>
+            <input id="sentSearch" class="list-search-inline" placeholder="쪽지 내용/받는 사람 검색">
             <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
           </div>
-          <button id="sentComposeBtn" class="primary">✉ 쪽지 보내기</button>
+          <button id="sentComposeBtn" class="primary"><span class="msi">edit</span>쪽지 보내기</button>
         </div>
         <div id="sentList" class="msg-list"></div>
       </div>
@@ -159,34 +164,34 @@
         <div id="chatLog" class="chat-log"></div>
         <div id="chatPending" class="pending-atts" style="display:none"></div>
         <div id="chatInputRow" class="chat-input" style="display:none">
-          <button id="chatAttachBtn" title="파일 첨부">📎</button>
+          <button id="chatAttachBtn" class="icon-btn" title="파일 첨부"><span class="msi">attach_file</span></button>
           <textarea id="chatText" rows="2" placeholder="메시지 입력 (Enter: 전송, Shift+Enter: 줄바꿈)"></textarea>
-          <button id="chatSendBtn" class="primary">전송</button>
+          <button id="chatSendBtn" class="primary"><span class="msi">send</span>전송</button>
         </div>
       </div>
 
       <div id="tab-rooms" class="tab-body rooms-body" style="display:none">
         <div id="roomListView">
           <div class="room-toolbar">
-            <button id="roomCreateBtn" class="primary">+ 채팅방 만들기</button>
+            <button id="roomCreateBtn" class="primary"><span class="msi">add_comment</span>채팅방 만들기</button>
           </div>
           <div id="roomList" class="msg-list"></div>
         </div>
         <div id="roomChatView" style="display:none">
           <div class="chat-head room-head">
-            <button id="roomBackBtn" class="ghost">◀ 목록</button>
+            <button id="roomBackBtn" class="ghost"><span class="msi">arrow_back</span>목록</button>
             <span id="roomChatTitle"></span>
             <span class="spacer"></span>
-            <button id="roomPollBtn" class="ghost" title="이 채팅방 사람들만 대상으로 설문">📊 설문</button>
-            <button id="roomInviteBtn" class="ghost">+ 초대</button>
-            <button id="roomLeaveBtn" class="ghost danger-text">나가기</button>
+            <button id="roomPollBtn" class="ghost" title="이 채팅방 사람들만 대상으로 설문"><span class="msi">ballot</span>설문</button>
+            <button id="roomInviteBtn" class="ghost"><span class="msi">person_add</span>초대</button>
+            <button id="roomLeaveBtn" class="ghost danger-text"><span class="msi">logout</span>나가기</button>
           </div>
           <div id="roomLog" class="chat-log"></div>
           <div id="roomPending" class="pending-atts" style="display:none"></div>
           <div class="chat-input">
-            <button id="roomAttachBtn" title="파일 첨부">📎</button>
+            <button id="roomAttachBtn" class="icon-btn" title="파일 첨부"><span class="msi">attach_file</span></button>
             <textarea id="roomText" rows="2" placeholder="메시지 입력 (Enter: 전송, Shift+Enter: 줄바꿈)"></textarea>
-            <button id="roomSendBtn" class="primary">전송</button>
+            <button id="roomSendBtn" class="primary"><span class="msi">send</span>전송</button>
           </div>
         </div>
       </div>
@@ -194,11 +199,12 @@
       <div id="tab-notice" class="tab-body">
         <div class="list-toolbar">
           <div class="search-wrap">
-            <input id="noticeSearch" class="list-search-inline" placeholder="🔍 공지 제목/내용/작성자 검색">
+            <span class="msi search-ic">search</span>
+            <input id="noticeSearch" class="list-search-inline" placeholder="공지 제목/내용/작성자 검색">
             <button class="search-clear" type="button" title="검색어 지우기" style="display:none">✕</button>
           </div>
-          <button id="noticeWriteBtn2" class="primary">📝 공지 쓰기</button>
-          <button id="pollWriteBtn2">📊 설문 만들기</button>
+          <button id="noticeWriteBtn2" class="primary"><span class="msi">edit_note</span>공지 쓰기</button>
+          <button id="pollWriteBtn2"><span class="msi">ballot</span>설문 만들기</button>
         </div>
         <div id="noticeList" class="msg-list"></div>
       </div>
@@ -209,12 +215,12 @@
 <!-- 쪽지 작성 모달 -->
 <div id="composeModal" class="modal-bg" style="display:none">
   <div class="modal large scroll-layout">
-    <button id="composeClose" class="modal-x" title="닫기 (임시저장됨)">✕</button>
+    <button id="composeClose" class="modal-x" title="닫기 (임시저장됨)"><span class="msi">close</span></button>
     <h2>쪽지 보내기</h2>
     <div class="modal-scroll">
     <div class="recip-head">
       <label style="margin:0">받는 사람</label>
-      <button id="recipSelfBtn" type="button" title="나에게 보내기 — 메모처럼 쓸 수 있습니다">👤 나에게 보내기</button>
+      <button id="recipSelfBtn" type="button" title="나에게 보내기 — 메모처럼 쓸 수 있습니다"><span class="msi">person</span>나에게 보내기</button>
     </div>
     <div id="recipChips" class="chips"></div>
     <div id="recipPicker" class="picker"></div>
@@ -243,17 +249,17 @@
       <button type="button" class="rt-btn" data-cmd="strikeThrough" title="취소선"><s>가</s></button>
       <input type="color" id="rtColor" value="#c62828" title="글자 색 (선택한 글자에 적용)">
       <span class="rt-sep"></span>
-      <button type="button" class="rt-btn" data-cmd="justifyLeft" title="왼쪽 정렬">⯇</button>
-      <button type="button" class="rt-btn" data-cmd="justifyCenter" title="가운데 정렬">☰</button>
-      <button type="button" class="rt-btn" data-cmd="justifyRight" title="오른쪽 정렬">⯈</button>
+      <button type="button" class="rt-btn" data-cmd="justifyLeft" title="왼쪽 정렬"><span class="msi">format_align_left</span></button>
+      <button type="button" class="rt-btn" data-cmd="justifyCenter" title="가운데 정렬"><span class="msi">format_align_center</span></button>
+      <button type="button" class="rt-btn" data-cmd="justifyRight" title="오른쪽 정렬"><span class="msi">format_align_right</span></button>
       <span class="rt-sep"></span>
-      <button type="button" class="rt-btn" data-cmd="removeFormat" title="서식 지우기">지우기</button>
+      <button type="button" class="rt-btn" data-cmd="removeFormat" title="서식 지우기"><span class="msi">format_clear</span></button>
     </div>
     <div id="composeText" class="rich-editor" contenteditable="true" data-placeholder="내용을 입력하세요. 글자를 선택한 뒤 위 도구로 서식을 적용할 수 있습니다."></div>
     <div id="composeCarry" class="files"></div>
     <div id="composeFileList" class="att-list"></div>
     <div class="row">
-      <button id="composeAddFile" type="button">📎 파일 추가</button>
+      <button id="composeAddFile" type="button"><span class="msi">attach_file</span>파일 추가</button>
       <input type="file" id="composeFiles" multiple style="display:none">
       <span class="drop-hint">💡 파일을 이 창에 끌어다 놓아도 첨부됩니다 (여러 번 추가 가능)</span>
     </div>
@@ -265,9 +271,9 @@
     </div>
     <div class="modal-btns">
       <span id="draftInfo" class="draft-info"></span>
-      <button id="draftSaveBtn" title="지금 임시저장하고 창 닫기">💾 임시저장</button>
-      <button id="composeCancel">취소</button>
-      <button id="composeSend" class="primary">보내기</button>
+      <button id="draftSaveBtn" class="text-btn" title="지금 임시저장하고 창 닫기"><span class="msi">save</span>임시저장</button>
+      <button id="composeCancel" class="text-btn">취소</button>
+      <button id="composeSend" class="primary"><span class="msi">send</span>보내기</button>
     </div>
   </div>
 </div>
@@ -299,7 +305,7 @@
     </div>
     <div id="noticeFileList" class="att-list"></div>
     <div class="row" style="margin-top:8px">
-      <button id="noticeAddFile" type="button">📎 파일 첨부</button>
+      <button id="noticeAddFile" type="button"><span class="msi">attach_file</span>파일 첨부</button>
       <input type="file" id="noticeFiles" multiple style="display:none">
       <span class="drop-hint">💡 파일을 이 창에 끌어다 놓아도 첨부됩니다</span>
     </div>
@@ -319,7 +325,7 @@
 <!-- 채팅방 설문 만들기 모달 (채팅방 참여자만 대상) -->
 <div id="roomPollModal" class="modal-bg" style="display:none">
   <div class="modal">
-    <h2>📊 채팅방 설문</h2>
+    <h2>채팅방 설문</h2>
     <div id="rpTarget" class="modal-hint" style="margin-top:0"></div>
     <label>질문</label>
     <input id="rpQuestion" placeholder="예: 회식 날짜를 정해 주세요">
@@ -343,7 +349,7 @@
 <!-- 회원가입 요청 승인 모달 (관리자) -->
 <div id="signupMgrModal" class="modal-bg" style="display:none">
   <div class="modal wide scroll-layout">
-    <h2>🔔 회원가입 요청 승인</h2>
+    <h2>회원가입 요청 승인</h2>
     <div class="modal-scroll">
       <div id="signupMgrList"></div>
     </div>
@@ -424,8 +430,8 @@
     <h2>설정</h2>
     <label class="chk"><input type="checkbox" id="autostartChk"> Windows 시작 시 자동 실행</label>
     <label class="chk"><input type="checkbox" id="soundChk"> 새 메시지 알림음</label>
-    <label class="chk"><input type="checkbox" id="darkChk"> 🌙 다크 모드</label>
-    <div class="pf-divider">📁 첨부파일 저장 폴더</div>
+    <label class="chk"><input type="checkbox" id="darkChk"> 다크 모드</label>
+    <div class="pf-divider">첨부파일 저장 폴더</div>
     <div id="dlDirNow" class="dl-dir-now">-</div>
     <div class="row" style="margin-top:6px">
       <button id="dlDirChange">폴더 변경</button>
@@ -455,7 +461,7 @@
     <input id="pfMobile" placeholder="예: 010-0000-0000">
     <label>이메일</label>
     <input id="pfEmail" placeholder="예: teacher@school.kr">
-    <div class="pf-divider">🔒 비밀번호 변경 <span class="hint-inline">(바꿀 때만 입력)</span></div>
+    <div class="pf-divider">비밀번호 변경 <span class="hint-inline">(바꿀 때만 입력)</span></div>
     <label>현재 비밀번호</label>
     <input id="pwOld" type="password">
     <label>새 비밀번호 (4자 이상)</label>
@@ -475,10 +481,10 @@
   <div class="ctx-head" id="ctxName"></div>
   <div class="ctx-info" id="ctxInfo"></div>
   <div id="ctxMain">
-    <div class="ctx-item" data-act="msg">✉ 쪽지 보내기</div>
-    <div class="ctx-item" data-act="chat">💬 대화하기</div>
-    <div class="ctx-item" data-act="group">👥 사용자 그룹에 추가 ▸</div>
-    <div class="ctx-item" data-act="profile" style="display:none">✎ 내 정보 수정</div>
+    <div class="ctx-item" data-act="msg"><span class="msi">mail</span>쪽지 보내기</div>
+    <div class="ctx-item" data-act="chat"><span class="msi">chat</span>대화하기</div>
+    <div class="ctx-item" data-act="group"><span class="msi">group_add</span>사용자 그룹에 추가 ▸</div>
+    <div class="ctx-item" data-act="profile" style="display:none"><span class="msi">edit</span>내 정보 수정</div>
   </div>
   <div id="ctxGroups" style="display:none"></div>
 </div>
@@ -508,8 +514,14 @@
 <!-- 프로그램 정보 모달 -->
 <div id="aboutModal" class="modal-bg" style="display:none">
   <div class="modal narrow" style="text-align:center">
-    <h2 style="font-size:18px">🏫 학교메신저</h2>
+    <div class="about-logo"><span class="msi">school</span></div>
+    <h2 style="text-align:center;padding:0">학교메신저</h2>
     <p style="margin:6px 0;font-size:14px">버전 <b id="aboutVersion">-</b></p>
+    <div class="about-upd">
+      <button id="aboutCheckBtn" type="button"><span class="msi">sync</span>업데이트 확인</button>
+      <a id="aboutGhLink" href="#" style="display:none">GitHub 에서 직접 받기</a>
+      <div id="aboutUpdMsg" class="modal-hint" style="margin-top:6px"></div>
+    </div>
     <p class="modal-hint" style="margin:6px 0">교내망 전용 학교 메신저<br>쪽지 · 대화 · 채팅방 · 공지 · 설문 · 파일 공유</p>
     <p style="margin:12px 0 4px;font-size:13px;color:#789">ⓒ jiseok. All rights reserved.</p>
     <div class="modal-btns" style="justify-content:center">

@@ -1,13 +1,14 @@
 {
   "name": "school-messenger-server",
-  "version": "0.9.10",
+  "version": "0.9.11",
   "description": "학교 메신저 서버 - 교내망용 메시지 서버 및 관리 도구",
   "main": "main.js",
   "author": "School Messenger",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "dist:linux": "node scripts/build-linux.js"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -30,7 +31,10 @@
       "server.js",
       "ui/**/*",
       "icon.ico",
-      "icon.png"
+      "icon.png",
+      "updater.js",
+      "update-manager.js",
+      "admin-core.js"
     ],
     "win": {
       "target": [

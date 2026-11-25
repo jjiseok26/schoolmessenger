@@ -3,12 +3,15 @@ const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage } = require
 const path = require('path');
 const fs = require('fs');
 const { MessengerServer } = require('./server');
+const { UpdateManager } = require('./update-manager');
+const core = require('./admin-core');
 
 let win = null;
 let tray = null;
 let quitting = false;
 let server = null;
-let settings = { port: 7777, schoolName: '' };
+let settings = { port: 7777, schoolName: '', update: {} };
+let updater = null; // GitHub 자동 업데이트 관리
 let settingsFile = null;
 
 // 중복 실행 방지: 이미 실행 중이면 기존 창을 앞으로
@@ -105,6 +108,7 @@ app.whenReady().then(async () => {
   }
   server = new MessengerServer(dataDir);
   server.schoolName = settings.schoolName || '';
+  server.version = app.getVersion();
   server.onStatusChange = pushStatus;
   // 데이터 파일이 손상되어 백업으로 복구했으면 관리자에게 알림
   if (server._recovered) {
@@ -119,7 +123,33 @@ app.whenReady().then(async () => {
   }
   createWindow();
   createTray();
+  startUpdater();
 });
+
+// ---------- GitHub 자동 업데이트 ----------
+// 새 서버 설치파일: /S=무음, --updated=실행 중인 서버가 스스로 종료되길 기다림, --force-run=설치 후 다시 실행
+function startUpdater() {
+  settings.update = settings.update || {};
+  updater = new UpdateManager({
+    server,
+    options: settings.update,
+    saveOptions: saveSettings,
+    currentVersion: app.getVersion(),
+    serverAssetKind: 'serverWin',
+    workDir: path.join(app.getPath('userData'), 'update'),
+    apiBase: process.env.SM_UPDATE_API || undefined, // 시험용 가짜 GitHub 주소
+    install: async (p) => {
+      if (!app.isPackaged && !process.env.SM_UPDATE_TEST) throw new Error('개발 실행 중에는 설치할 수 없습니다.');
+      const child = require('child_process').spawn(p.file, ['/S', '--updated', '--force-run'], {
+        detached: true, stdio: 'ignore', windowsHide: true
+      });
+      child.unref();
+      setTimeout(quitApp, 500); // 설치 프로그램이 서버 종료를 기다렸다가 파일을 교체함
+    }
+  });
+  updater.onChange = (st) => { if (win && !win.isDestroyed()) win.webContents.send('update-state', st); };
+  if (app.isPackaged || process.env.SM_UPDATE_TEST) updater.start();
+}
 
 app.on('window-all-closed', () => {
   // 트레이 상주: 창이 없어도 서버는 계속 실행
@@ -133,7 +163,7 @@ ipcMain.on('refocus', () => {
 });
 ipcMain.handle('get-status', () => server.getStatus());
 ipcMain.handle('get-users', () => server.listUsers());
-ipcMain.handle('get-settings', () => settings);
+ipcMain.handle('get-settings', () => ({ ...settings, update: undefined })); // 토큰은 화면에 보내지 않음
 ipcMain.handle('get-data-dir', () => server.dataDir);
 
 ipcMain.handle('add-user', (e, u) => {
@@ -164,11 +194,7 @@ ipcMain.handle('export-csv', async () => {
     filters: [{ name: 'CSV 파일', extensions: ['csv'] }]
   });
   if (canceled || !filePath) return null;
-  const clean = (s) => String(s || '').replace(/[,\r\n]/g, ' ').trim();
-  const rows = server.listUsers().map(u =>
-    [u.id, clean(u.name), clean((u.depts || [u.dept]).join(';')), clean(u.position)].join(','));
-  // BOM 포함 UTF-8: 엑셀에서 한글이 깨지지 않음
-  fs.writeFileSync(filePath, '\uFEFF아이디,이름,부서,직위\r\n' + rows.join('\r\n'), 'utf8');
+  fs.writeFileSync(filePath, core.buildUsersCsv(server.listUsers()), 'utf8');
   return filePath;
 });
 
@@ -183,31 +209,7 @@ ipcMain.handle('import-csv', async () => {
     properties: ['openFile']
   });
   if (canceled || !filePaths.length) return null;
-  const file = filePaths[0];
-  if (/\.xlsx?$/i.test(file)) {
-    // 엑셀 파일: 첫 번째 시트를 읽어 CSV 형식 줄로 변환
-    const XLSX = require('xlsx');
-    const wb = XLSX.readFile(file);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-    const lines = rows
-      .map(r => r.map(c => String(c).trim().replace(/,/g, ' ')).join(','))
-      .filter(l => l.replace(/,/g, '').trim());
-    if (lines.length && /^(아이디|id)\s*,/i.test(lines[0].trim())) lines.shift();
-    const result = server.bulkAdd(lines.join('\n'));
-    return { result, users: server.listUsers() };
-  }
-  const buf = fs.readFileSync(file);
-  let text = buf.toString('utf8');
-  if (text.includes('�')) {
-    // 한글 Windows 엑셀의 구형 CSV(CP949/EUC-KR) 대응
-    try { text = new TextDecoder('euc-kr').decode(buf); } catch (e) {}
-  }
-  text = text.replace(/^\uFEFF/, '');
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length && /^(아이디|id)\s*,/i.test(lines[0].trim())) lines.shift(); // 머리글 행 무시
-  const result = server.bulkAdd(lines.join('\n'));
-  return { result, users: server.listUsers() };
+  return core.importUsers(server, fs.readFileSync(filePaths[0]), filePaths[0]);
 });
 
 // ---------- 클라이언트 자동 업데이트 파일 등록 ----------
@@ -235,6 +237,11 @@ ipcMain.on('open-log', () => {
   if (fs.existsSync(server.logFile)) shell.showItemInFolder(server.logFile);
 });
 ipcMain.handle('get-app-version', () => app.getVersion());
+ipcMain.handle('get-platform', () => process.platform);
+ipcMain.handle('get-update-state', () => updater ? updater.getState() : null);
+ipcMain.handle('set-update-options', (e, o) => updater.setOptions(o));
+ipcMain.handle('check-update', () => updater.check(true));
+ipcMain.handle('install-server-update', () => updater.installNow('manual'));
 
 // ---------- 부서(그룹) 표시 순서 ----------
 ipcMain.handle('get-dept-order', () => server.getDeptOrder());
@@ -252,31 +259,13 @@ ipcMain.handle('set-school-name', (e, name) => {
 });
 
 // ---------- 백업 (서버 이전용) ----------
-function copyDirSync(src, dst) {
-  fs.mkdirSync(dst, { recursive: true });
-  for (const f of fs.readdirSync(src)) {
-    const s = path.join(src, f), d = path.join(dst, f);
-    if (fs.statSync(s).isDirectory()) copyDirSync(s, d);
-    else fs.copyFileSync(s, d);
-  }
-}
-
 ipcMain.handle('backup-export', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title: '백업을 저장할 폴더 선택',
     properties: ['openDirectory', 'createDirectory']
   });
   if (canceled || !filePaths.length) return null;
-  const d = new Date();
-  const p2 = (n) => String(n).padStart(2, '0');
-  const name = `학교메신저-백업-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
-  const dst = path.join(filePaths[0], name);
-  server.saveNow();
-  fs.mkdirSync(dst, { recursive: true });
-  fs.copyFileSync(path.join(server.dataDir, 'data.json'), path.join(dst, 'data.json'));
-  if (fs.existsSync(server.uploadDir)) copyDirSync(server.uploadDir, path.join(dst, 'uploads'));
-  server.log('백업 내보내기: ' + dst);
-  return dst;
+  return core.backupTo(server, filePaths[0]);
 });
 
 ipcMain.handle('backup-import', async () => {
@@ -297,10 +286,7 @@ ipcMain.handle('backup-import', async () => {
   });
   if (response !== 0) return null;
   await server.stop();
-  fs.copyFileSync(path.join(src, 'data.json'), path.join(server.dataDir, 'data.json'));
-  if (fs.existsSync(path.join(src, 'uploads'))) {
-    copyDirSync(path.join(src, 'uploads'), server.uploadDir);
-  }
+  core.restoreFrom(server, src);
   quitting = true;
   app.relaunch();
   app.exit(0);
@@ -328,7 +314,7 @@ ipcMain.handle('change-data-dir', async () => {
   if (response !== 0) return null;
   await server.stop();
   server.saveNow();
-  copyDirSync(server.dataDir, dst);
+  core.copyDirSync(server.dataDir, dst);
   settings.dataDir = dst;
   saveSettings();
   quitting = true;

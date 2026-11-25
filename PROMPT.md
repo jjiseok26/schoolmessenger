@@ -23,11 +23,27 @@
 
 ```
 schoolmessenger/
-├─ server/   # 서버 앱 (main.js, preload.js, server.js, ui/index.html·style.css·app.js, icon)
-└─ client/   # 클라이언트 앱 (main.js, preload.js, ui/index.html·style.css·app.js, icon)
+├─ server/   # 서버 앱
+│   ├─ main.js, preload.js     # 윈도우 관리 프로그램 (Electron)
+│   ├─ server.js               # 서버 코어 (Electron 비의존)
+│   ├─ headless.js             # 리눅스용 실행 파일 (node headless.js) + web-admin.js (웹 관리 화면 /admin)
+│   ├─ updater.js              # GitHub 릴리스 확인·내려받기 (크기·SHA-256 검증)
+│   ├─ update-manager.js       # 자동 업데이트 정책 (6시간 확인, 클라이언트 자동 배포, 접속자 0명일 때 서버 설치)
+│   ├─ admin-core.js           # CSV 내보내기/가져오기·백업 공용 (윈도우·리눅스 공용)
+│   ├─ linux/                  # install.sh, uninstall.sh, 리눅스설치안내.txt
+│   ├─ scripts/build-linux.js  # 리눅스 꾸러미(tar.gz) 만들기 (npm run dist:linux)
+│   └─ ui/                     # index.html·style.css·app.js + web-api.js(브라우저용 window.api) + fonts/
+└─ client/   # 클라이언트 앱 (main.js, preload.js, ui/index.html·style.css·app.js + fonts/, icon)
 ```
 
-- 버전: **0.2.0** (양쪽 동일). 설치파일명: `SchoolMessenger-Server-Setup-{버전}.exe`, `SchoolMessenger-Client-Setup-{버전}.exe`
+- **화면 디자인: Google Material 3** (서버·클라이언트 모두) — 색은 CSS 변수(`--primary:#0b57d0`, `--primary-container:#d3e3fd`,
+  `--secondary-container:#c2e7ff`, `--bg:#f8fafd`, `--surface-1:#f0f4f9` …)로만 쓰고 다크 모드는 `body.dark` 에서 변수만 바꾼다.
+  알약 모양 버튼(filled/tonal/outlined/text), 둥근 판(16~28px), 세그먼트 버튼·필터 칩·스위치, Gmail 처럼 흰 판 콘텐츠·줄 단위 목록,
+  아이콘은 **Material Symbols Outlined 글꼴을 프로그램에 포함**(`ui/fonts/material-symbols-outlined.woff2`, Apache-2.0) — 교내망은 인터넷이 없어도 보여야 함.
+  `<span class="msi">아이콘이름</span>` (ligature). 글꼴 순서 `"Google Sans", Roboto, "Segoe UI", "Malgun Gothic"`
+
+- 버전: **0.2.0** (양쪽 동일). 설치파일명: `SchoolMessenger-Server-Setup-{버전}.exe`, `SchoolMessenger-Client-Setup-{버전}.exe`,
+  리눅스 `SchoolMessenger-Server-Linux-{버전}.tar.gz` (자동 업데이트가 이 이름 규칙으로 GitHub 릴리스 자산을 찾으므로 바꾸지 말 것)
 - 클라이언트 제품 표시 이름(productName)은 **"학교메신저"**(한글), 실행파일명(executableName)은 `SchoolMessenger`로 분리
   (Windows 알림 상단에 한글 이름이 나오게 `app.setAppUserModelId(appId)` 설정)
 - 클라이언트 아이콘: 파란 그라데이션 둥근 사각형에 흰색 **"sm"** 텍스트. 서버 아이콘: 초록 배경 "서버" 텍스트
@@ -59,8 +75,15 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 
 ### HTTP
 - 포트 기본 7777 (0.0.0.0), **CORS 전체 허용 필수** (클라이언트가 file:// 페이지라 없으면 업로드 실패)
-- `GET /health`, `POST /upload?token=&name=`(raw body, 200MB 제한, 로그인 토큰 검증),
+- `GET /health`(→ `{ ok, name, version }`), `POST /upload?token=&name=`(raw body, 200MB 제한, 로그인 토큰 검증),
   `GET /files/:fid/:name`(Content-Disposition attachment), `GET /client-update`(등록된 클라이언트 설치파일 다운로드)
+- `server.httpHooks` 배열의 함수(`(app) => {}`)를 start() 때 붙인다 — 리눅스 웹 관리 화면(`/admin`)이 여기에 붙음
+- 사용자 세부 정보 필드: `office`(50) `subject`(50) `phone`(30) `mobile`(30) `email`(60) — `addUser/updateUser` 가 받으며 넘어온 항목만 바꿈
+  (`updateUser(id, { name, dept, position, admin, ...details })`). `bulkAdd` 줄 형식:
+  `아이디,이름,부서,직위[,비밀번호,담당과목,사무실위치,사무실전화,핸드폰,이메일]`
+- 사용자 그룹 순서: `reorder_groups { ids }` → 내 그룹만 그 순서로(목록에 없는 건 뒤, 남의 그룹 자리는 그대로) → `groups_reordered { ids }`.
+  로그인 때 `groups` 는 저장 순서대로 보냄
+- `login_ok` 에 `updateRepo`(서버가 아는 **공개** GitHub 저장소, 토큰을 쓰는 비공개면 빈 값) — 클라이언트가 직접 GitHub 확인할 때 사용
 
 ### WebSocket(/ws) 프로토콜 — JSON 메시지
 - 로그인 전 허용: `login{id,pw}`, `signup_request{...}`
@@ -115,19 +138,53 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 
 - 트레이 상주: 창을 닫아도 서버 유지, 트레이 메뉴(관리 화면 열기/서버 종료)
 - 첫 실행 시 **학교 이름** 입력 모달 → 제목표시줄 "○○학교 메신저 서버" + 클라이언트에도 전달
-- **왼쪽 메뉴 트리**(고정 내비게이션): 서버 상태 / 사용자 관리 / 회원가입 요청(대기 수 배지) / 부서 표시 순서 / 데이터 관리 / 활동 로그 / 클라이언트 업데이트 — 클릭 시 해당 카드로 부드럽게 스크롤
+- **왼쪽 메뉴 트리**(고정 내비게이션, Material 내비게이션 드로어 — 알약 모양 선택 표시): 서버 상태 / 사용자 관리 / 회원가입 요청(대기 수 배지) / 부서 표시 순서 / 데이터 관리 / 활동 로그 / 프로그램 업데이트(받아 둔 업데이트가 있으면 빨간 점) — 클릭 시 해당 카드로 부드럽게 스크롤, 스크롤하면 보고 있는 카드의 메뉴가 강조됨
 - 카드 구성:
   1. **서버 상태**: 접속 주소(LAN IP:포트), 포트 변경, 등록/접속 사용자 수, 학교 이름, Windows 시작 시 자동 실행 체크
-  2. **사용자 관리**: 추가 폼(순서: 아이디→비밀번호→이름→부서→직위 + 관리자 체크, 부서는 datalist로 기존 부서 선택),
+  2. **사용자 관리**: **[계정 추가] / 줄의 ✏(연필, 또는 줄 두 번 클릭)** → 같은 모달(2열): 아이디*(수정 때는 읽기 전용)·초기/새 비밀번호·이름*·부서(datalist)·직위·
+     **담당 과목·사무실 위치·사무실 전화·핸드폰·이메일**(전화는 blur 때 자동 하이픈)·관리자 권한 스위치(기본 admin 계정은 끌 수 없음).
+     표 열: 상태·아이디·이름·부서·직위·담당 과목·사무실 전화·권한(칩)·[✏][🗑], 검색은 세부 정보까지.
+     (예전 추가 폼 순서: 아이디→비밀번호→이름→부서→직위 + 관리자 체크)
      `아이디,이름,부서,직위,비밀번호` 일괄 등록, **엑셀(xlsx 첫 시트)/CSV 가져오기**(CP949 자동 감지, 머리글 무시, 부서 다중은 `;`),
-     **엑셀용 CSV 내보내기**(UTF-8 BOM), **검색 입력**(아이디/이름/부서/직위 필터), 수정 모달(비밀번호 변경 포함), 삭제
+     **엑셀용 CSV 내보내기**(UTF-8 BOM, 머리글 `아이디,이름,부서,직위,비밀번호,담당과목,사무실위치,사무실전화,핸드폰,이메일`, 비밀번호 칸은 비움, admin 제외), 삭제
      ※ Electron은 `window.prompt()` 미지원 — 반드시 자체 모달 사용
   3. **회원가입 요청**: 요청자 정보 + 승인/거절 버튼, 5초 자동 갱신
-  4. **부서 표시 순서**: ▲▼ 버튼으로 순서 지정 → 모든 클라이언트 실시간 반영
+  4. **부서 표시 순서**: 끌어 놓기 또는 ↑↓ 버튼으로 순서 지정 → 모든 클라이언트 실시간 반영.
+     사용자들의 담당 과목에서 **`교과-{과목}`(과목 자동) 줄도 함께 보여 순서를 정할 수 있게** 한다(초록 [과목 자동] 표시, 순서 없는 교과는 맨 뒤)
   5. **데이터 관리**: 쪽지/채팅/첨부 용량 현황, 보관 기간(일, 0=무제한) 설정, "지금 정리"(기간 경과 데이터 + 참조 없는 첨부파일 삭제, 업로드 1시간 유예)
   6. **활동 로그**: 콘솔 스타일 최근 300건, 새로고침, 로그 파일 열기
-  7. **클라이언트 자동 업데이트**: 새 클라이언트 설치파일(.exe) 등록(파일명에서 버전 추출) → 구버전 클라이언트 로그인 시 자동 다운로드 후 재시작 한 번으로 설치
-- 헤더에 ℹ 정보 버튼(버전 + ⓒ jiseok)
+  7. **프로그램 업데이트 (GitHub)**: 서버 현재/GitHub 최신/클라이언트 배포 버전/마지막 확인 타일, [지금 확인], 진행률 막대,
+     받아 둔 서버 업데이트가 있으면 노란 줄 + [서버 업데이트 설치](확인창), 스위치 [GitHub 자동 업데이트](기본 켬)·[서버 자동 설치](기본 켬),
+     저장소(`소유자/이름`, GitHub 주소를 넣어도 정리) + 토큰(비공개 저장소용, 화면에는 '저장됨'만 표시·[토큰 지우기]),
+     맨 아래 **클라이언트 설치파일 직접 등록**(인터넷이 막힌 학교용, 파일명에서 버전 추출)
+     - `UpdateManager`(update-manager.js, 윈도우·리눅스 공용): 시작 20초 뒤 + 6시간마다 `GET /repos/{repo}/releases/latest` →
+       클라이언트 자산이 등록본보다 새로우면 `updateDir/client-setup-X.exe.download` 로 받아 `server.adoptClientUpdate()` 로 바로 배포,
+       서버 자산(윈도우 `serverWin` / 리눅스 `serverLinux`)이 지금보다 새로우면 받아 두고 `pending`. 1분마다 **접속자 0명 + 자동 설치 켬**이면 설치.
+       윈도우 설치 = NSIS `/S --updated --force-run` 분리 실행 후 서버 종료(설치 후 다시 실행), 개발 실행(`!app.isPackaged`)에서는 거부.
+     - `GithubUpdater`(updater.js): 비공개 저장소는 `Authorization: Bearer 토큰` + 자산 API 주소(`Accept: application/octet-stream`, `redirect:'manual'`)
+       → 넘겨 준 실제 파일 주소에는 **토큰을 보내지 않음**. 받는 중 1분 멈추면 중단, `.part` 로 받고 크기·`digest`(sha256) 검증 뒤 이름 바꿈.
+       오류 문구: 연결 불가(교내망 차단)·404(비공개면 토큰 안내)·401(토큰 만료)·403/429(요청 한도)
+     - 토큰은 settings.json 에만, `get-settings` 등 화면으로는 보내지 않음. 토큰이 없으면 `server.updateRepoPublic = repo`
+- 헤더에 ℹ 정보 버튼(버전 + ⓒ jiseok), [서버 상태]에 서버 버전 타일
+
+## 4-2. 리눅스 서버 (headless.js + 웹 관리 화면)
+
+- `node headless.js [--home 폴더] [--port] [--data-dir]` — 홈 기본값: root 면 `/var/lib/school-messenger-server`, 아니면 `~/.school-messenger-server`
+  (`SM_HOME` 환경변수 우선). 홈에 `settings.json`(port·schoolName·dataDir·update, 권한 600)과 `serverdata/`, `backups/`, `update/`
+- `web-admin.js`: `/admin/` 에 서버 관리 화면(ui/)을 그대로 제공. `/admin` → `/admin/` 로 넘김(라우터가 끝 `/` 를 구분하지 않으므로 originalUrl 로 판단).
+  `POST /admin/api/login {id,pw}`(관리자 권한 계정만, IP 당 10회 실패 시 10분 차단, 타이밍 안전 비교) → 토큰(12시간),
+  `POST /admin/api/call {fn,args}` + `X-Admin-Token` → window.api 와 같은 이름의 기능, `GET /admin/api/download/users.csv|activity.log`,
+  `POST /admin/api/upload/users|client-update?name=`(raw)
+- `ui/web-api.js`: `window.api` 가 없을 때만(=브라우저) 로그인 창(불투명 배경)을 띄우고 HTTP 로 연결. 파일 대화상자 기능은 브라우저식으로
+  (내보내기·로그 = 내려받기, 가져오기·클라이언트 등록 = 파일 선택 후 올리기, 백업 = 서버 `backups/` 에 저장·복원은 번호로 고름,
+  데이터 위치 변경 = settings.json 안내, 포트 변경 = 저장 후 재시작하고 새 주소로 이동), onStatus 등은 3~5초 폴링
+- 화면 문구는 `getPlatform()==='linux'` 이면 '부팅 시 서버 자동 실행'(스위치 비활성)·'로그 파일 내려받기'로 바꿈, 웹이면 오른쪽 위 로그아웃 아이콘
+- 리눅스 업데이트 설치: tar.gz 를 `update/unpack-*` 에 풀어 `package.json` 버전 확인 → 프로그램 폴더에 덮어쓰기 → 종료(0) → systemd `Restart=always` 가 다시 띄움
+- `linux/install.sh`(sudo): Node 18+ 확인, 서비스 계정 `schoolmsg`, `/opt/school-messenger-server` 복사·소유권(자동 업데이트가 쓸 수 있게),
+  systemd 서비스 `school-messenger-server`(Environment=SM_HOME, Restart=always) 등록·시작, ufw/firewalld 켜져 있으면 7777 허용, 접속 주소 안내.
+  `uninstall.sh [--purge]`. `.gitattributes` 로 `*.sh` 는 LF 유지(빌드 스크립트도 CRLF→LF 변환)
+- `scripts/build-linux.js`: 운영 파일 + ui/ + `npm ls --omit=dev --parseable` 의 라이브러리만 복사(모두 순수 JS) → 윈도우 기본 tar(`System32\tar.exe`)로
+  `school-messenger-server/` 최상위 폴더의 tar.gz (Git 의 GNU tar 는 `C:` 를 원격 주소로 읽으므로 경로 지정)
 
 ## 5. 클라이언트 앱 (Electron)
 
@@ -145,10 +202,13 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
     (검색처럼 접힌 부서도 펼치고 빈 부서는 숨김), presence 가 바뀌면 바로 다시 그린다. 필터를 바꿀 때 화면에서 사라진 사람은
     선택(`treeSel`)에서도 빼서 안 보이는 사람에게 쪽지가 가지 않게 한다. "전체 선택"은 보이는 사람만 대상
   - **다중 부서**: 사용자는 여러 부서에 동시에 표시. **트리형 부서**: 이름에 `-`가 있으면 상위-하위로 표시(예: 교과-국어)
-  - **교과 자동 조직**: 담당 과목 입력 시 조직도 **맨 아래 "교과" 상위조직 밑에 "교과-{과목}"**으로 자동 소속(파생 조직은 이름변경/이동 불가)
+  - **교과 자동 조직**: 담당 과목 입력 시 "교과" 상위조직 밑에 "교과-{과목}"으로 자동 소속(파생 조직은 이름변경·사람 이동 불가).
+    정렬은 `deptOrder` 에 있으면 그 자리, 없으면 일반 부서 뒤(10000) → 교과(20000) 순. **관리자는 교과 상위/하위 제목도 끌어 놓아 순서를 정할 수 있음**
+    (`set_dept_order` 에 `교과-*` 이름도 포함해서 보냄)
   - 관리자: 부서/사용자 **드래그앤드롭**(부서 순서, 부서 내 사용자 순서, 다른 부서로 이동), 부서 우클릭 → **부서 관리 모달**(새 부서 추가, 여러 부서 선택해 이름 변경=병합, 빈 부서 삭제)
   - 우클릭 메뉴: 쪽지 보내기/대화하기/사용자 그룹에 추가▸(내 그룹 목록+새 그룹)/내 정보 수정(본인), 프로필 정보(🏢📚☎📱✉) 표시, 다중 선택 시 선택 전체에 적용
-  - 사용자 그룹 탭: 내가 만든 그룹들(서버 저장), 구성원 개별 체크→선택 쪽지, 전체 쪽지, 채팅방 만들기, 수정/삭제
+  - 사용자 그룹 탭: 내가 만든 그룹들(서버 저장), 구성원 개별 체크→선택 쪽지, 전체 쪽지, 채팅방 만들기, 수정/삭제.
+    **순서 바꾸기**: 그룹 제목줄의 손잡이·↑↓ 버튼(맨 위/아래는 비활성), 그룹 카드를 다른 카드 위로 끌어 놓기(`G|id`) → 바로 다시 그리고 `reorder_groups`
   - 관리자는 하단 "⚙ 조직/사용자 관리" 버튼 → 계정 추가/수정/삭제 모달(검색 포함)
 - **오른쪽 탭** (순서 중요): **📢공지사항(첫 탭, 로그인 시 기본)** / ✉받은쪽지 / 보낸쪽지 / 대화 / 채팅방 + "쪽지 보내기" 버튼
   - 목록 항목에 **[공지](주황)/[쪽지](파랑) 라벨** + 아바타 + 미리보기 + 안읽음 강조/배지
@@ -241,6 +301,14 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 4. electron-builder의 winCodeSign 압축 해제가 심볼릭 링크 권한으로 실패할 수 있음 → 캐시에 수동 압축 해제로 우회
 5. 알림 앱 이름: `app.setAppUserModelId(appId)` + 한글 productName
 
+### 클라이언트 업데이트 (v0.9.11)
+- 로그인 때 `S.serverClientVer`(서버 등록본)가 내 버전보다 새로우면 서버 `/client-update` 에서, 아니면 `S.updateRepo` 가 있을 때
+  메인 프로세스 `check-github-update(repo)`(공개 API, 10초 제한)로 GitHub 최신 클라이언트 자산을 찾아 `browser_download_url` 로 받음.
+  GitHub 직접 확인은 **6시간에 한 번**(localStorage `ghCheckAt`, 학교는 인터넷 주소 하나를 같이 써서 요청 한도에 걸림), [정보] → [업데이트 확인]은 즉시.
+- `download-update` 허용 주소: `http(s)://서버/client-update` 또는 `https://github.com/{o}/{r}/releases/download/{tag}/SchoolMessenger-Client-Setup-x.y.z.exe`
+  (시험용 `SM_GITHUB_API` 지정 시 그 주소). GitHub 는 실제 파일로 넘겨 주므로 `will-download` 에서 `item.getURLChain()` 까지 비교
+- 정보 창: 버전, [업데이트 확인] + 결과 문구, [GitHub 에서 직접 받기](릴리스 페이지를 기본 브라우저로)
+
 ## 6. 검증 (필수)
 
 - 서버 코어를 단독 node로 띄워 WebSocket 자동 테스트 작성: 로그인/거부/kick, 쪽지 송수신/읽음/회수(읽은 뒤 회수·남의 쪽지 차단)/
@@ -252,3 +320,7 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 - 클라이언트 UI는 `electron.exe . --remote-debugging-port=<포트>`로 띄우고 CDP(`Runtime.evaluate`)로 실제 화면을 조작해 검증
   (로그인 → 설문 만들기/투표/투표자 표시, 드래그앤드롭 첨부, 가입 승인까지). `confirm/alert`은 테스트 중 임시 대체
 - 빌드 후 패키징된 exe를 실제 실행해 /health, 로그인, 클라이언트 창 표시 확인
+- 자동 업데이트는 **가짜 GitHub API**(http 서버: releases/latest + 자산 302 넘김 + digest)로 검증: 공개/비공개(토큰, 실제 파일 주소에 토큰 미전송)/
+  SHA-256 불일치 거부/연결 실패 문구/이미 최신/접속자 있으면 설치 안 함·0명이면 설치/자동 설치 끔. 리눅스는 프로그램 폴더 **복사본**에서
+  headless.js 를 띄워 웹 관리 API 전체 + 업데이트 설치(파일 교체 후 종료, 데이터 유지)까지
+- 리눅스 꾸러미는 풀어서 `node headless.js` 로 실제 실행해 `/health`·`/admin/` 확인

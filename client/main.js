@@ -159,7 +159,8 @@ app.whenReady().then(() => {
     try { fs.writeFileSync(initFlag, '1'); } catch (e) {}
   }
   session.defaultSession.on('will-download', (e, item) => {
-    if (pendingUpdateUrl && item.getURL() === pendingUpdateUrl) {
+    // GitHub 는 실제 파일 주소로 넘겨 주므로 거쳐 온 주소 목록까지 확인
+    if (pendingUpdateUrl && (item.getURL() === pendingUpdateUrl || item.getURLChain().includes(pendingUpdateUrl))) {
       // 자동 업데이트: 백그라운드로 내려받고, 완료되면 "재시작" 안내만 표시 (강제 종료 없음)
       pendingUpdateUrl = null;
       const version = pendingUpdateVersion;
@@ -238,8 +239,17 @@ app.on('before-quit', () => {
 
 ipcMain.handle('get-version', () => app.getVersion());
 // 새 버전 자동 다운로드 시작 (이미 준비됐거나 받는 중이면 건너뜀)
+// 내려받을 수 있는 주소: 서버의 /client-update 또는 GitHub 릴리스의 클라이언트 설치파일
+function isUpdateUrl(url) {
+  url = String(url || '');
+  if (/^https?:\/\/[^/]+\/client-update$/.test(url)) return true;
+  const gh = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/[^/]+\/SchoolMessenger-Client-Setup-\d+\.\d+\.\d+\.exe$/i;
+  if (gh.test(url)) return true;
+  // 시험용 가짜 GitHub (SM_GITHUB_API 를 지정했을 때만)
+  return !!process.env.SM_GITHUB_API && url.startsWith(process.env.SM_GITHUB_API) && /SchoolMessenger-Client-Setup-\d+\.\d+\.\d+\.exe$/i.test(url);
+}
 ipcMain.handle('download-update', (e, url, version) => {
-  if (!/^https?:\/\/[^/]+\/client-update$/.test(String(url))) return { ok: false };
+  if (!isUpdateUrl(url)) return { ok: false };
   version = String(version || '');
   if (updateReady && updateReady.version === version && fs.existsSync(updateReady.path)) {
     return { ok: true, ready: true, version };
@@ -249,6 +259,32 @@ ipcMain.handle('download-update', (e, url, version) => {
   pendingUpdateVersion = version;
   win.webContents.downloadURL(url);
   return { ok: true, downloading: true };
+});
+// 서버에 새 버전이 없을 때 GitHub(공개 저장소)에서 직접 최신 클라이언트 확인
+ipcMain.handle('check-github-update', async (e, repo) => {
+  repo = String(repo || '');
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) return { ok: false, error: '저장소 정보가 없습니다.' };
+  const api = process.env.SM_GITHUB_API || 'https://api.github.com';
+  try {
+    const res = await fetch(`${api}/repos/${repo}/releases/latest`, {
+      headers: { 'User-Agent': 'SchoolMessenger-Client', Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!res.ok) {
+      return { ok: false, error: res.status === 404
+        ? 'GitHub 에서 릴리스를 찾을 수 없습니다. (비공개 저장소이거나 아직 릴리스가 없음)'
+        : 'GitHub 응답 오류 (' + res.status + ')' };
+    }
+    const rel = await res.json();
+    let best = null;
+    for (const a of rel.assets || []) {
+      const m = /^SchoolMessenger-Client-Setup-(\d+\.\d+\.\d+)\.exe$/i.exec(a.name || '');
+      if (m && (!best || verNewer(m[1], best.version))) best = { version: m[1], url: a.browser_download_url, size: a.size };
+    }
+    return { ok: true, page: rel.html_url || '', ...(best || { version: '' }) };
+  } catch (err) {
+    return { ok: false, error: 'GitHub 에 연결할 수 없습니다. (인터넷이 막혀 있으면 서버를 통해 업데이트됩니다)' };
+  }
 });
 ipcMain.handle('get-update-ready', () =>
   (updateReady && fs.existsSync(updateReady.path)) ? { version: updateReady.version } : null);

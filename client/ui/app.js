@@ -281,10 +281,12 @@ function handleServer(m) {
       S.loggedIn = true;
       $('#connBanner').style.display = 'none';
       $('#statusSel').value = 'online';
-      checkClientUpdate(m.clientUpdate);
+      S.serverClientVer = m.clientUpdate || '';
+      S.updateRepo = m.updateRepo || '';
+      checkClientUpdate();
       // 학교 이름 표시 (제목표시줄 + 헤더)
       document.title = m.schoolName ? m.schoolName + ' 메신저' : '학교메신저';
-      $('.brand') && ($('.brand').textContent = '🏫 ' + (m.schoolName || '학교메신저'));
+      $('#brandName').textContent = m.schoolName || '학교메신저';
       S.initialTriesLeft = 0;
       if (!wasReconnect) {
         if ($('#loginSave').checked) saveCurrentConn(); // 접속 성공 시 접속 정보 자동 저장
@@ -486,6 +488,12 @@ function handleServer(m) {
       S.groups = S.groups.filter(g => g.id !== m.id);
       renderGroups();
       break;
+    case 'groups_reordered': {
+      const rank = (g) => { const i = m.ids.indexOf(g.id); return i < 0 ? 1e6 : i; };
+      S.groups.sort((a, b) => rank(a) - rank(b));
+      renderGroups();
+      break;
+    }
     case 'admin_result':
       if (!m.ok) {
         if ($('#adminModal').style.display !== 'none') $('#adminError').textContent = m.error || '실패했습니다.';
@@ -542,15 +550,39 @@ function verNewer(a, b) { // a가 b보다 최신인가
 }
 
 // 새 버전이 있으면 묻지 않고 백그라운드로 내려받고, 준비되면 상단 배너로 "재시작" 안내
-async function checkClientUpdate(serverVer) {
+//  1) 서버에 등록된 새 버전 (서버가 GitHub 에서 자동으로 받아 두거나 관리자가 직접 등록)
+//  2) 서버에 없으면 GitHub(공개 저장소)에서 직접 — 서버가 저장소를 알려 준 경우만
+// 반환값: 화면에 보여 줄 결과 문구 (정보 창의 [업데이트 확인]에서 사용)
+async function checkClientUpdate(manual) {
   try {
-    if (!serverVer || S.updatePrompted === serverVer) return;
     const mine = await window.native.getVersion();
-    if (!verNewer(serverVer, mine)) return;
-    S.updatePrompted = serverVer;
-    const r = await window.native.downloadUpdate(httpBase() + '/client-update', serverVer);
-    if (r && r.ready) showUpdateBanner(serverVer);
-  } catch (e) {}
+    const serverVer = S.serverClientVer;
+    if (serverVer && verNewer(serverVer, mine)) {
+      if (S.updatePrompted === serverVer) return `새 버전 v${serverVer} 을(를) 준비하고 있습니다.`;
+      S.updatePrompted = serverVer;
+      const r = await window.native.downloadUpdate(httpBase() + '/client-update', serverVer);
+      if (r && r.ready) showUpdateBanner(serverVer);
+      return `새 버전 v${serverVer} 을(를) 서버에서 내려받고 있습니다.`;
+    }
+    // GitHub 직접 확인은 6시간에 한 번만 (학교는 인터넷 주소 하나를 같이 써서 GitHub 요청 한도에 금방 걸림)
+    const ghLast = Number(localStorage.getItem('ghCheckAt') || 0);
+    if (S.updateRepo && window.native.checkGithubUpdate && (manual || Date.now() - ghLast > 6 * 3600000)) {
+      localStorage.setItem('ghCheckAt', String(Date.now()));
+      const g = await window.native.checkGithubUpdate(S.updateRepo);
+      S.updatePage = g.page || '';
+      if (g.ok && g.version && g.url && verNewer(g.version, mine)) {
+        if (S.updatePrompted === g.version) return `새 버전 v${g.version} 을(를) 준비하고 있습니다.`;
+        S.updatePrompted = g.version;
+        const r = await window.native.downloadUpdate(g.url, g.version);
+        if (r && r.ready) showUpdateBanner(g.version);
+        return r && r.ok ? `새 버전 v${g.version} 을(를) GitHub 에서 내려받고 있습니다.` : 'GitHub 에서 내려받을 수 없습니다.';
+      }
+      if (!g.ok && manual) return g.error;
+    }
+    return `최신 버전입니다. (v${mine})`;
+  } catch (e) {
+    return '업데이트를 확인하지 못했습니다.';
+  }
 }
 
 // 업데이트 준비 배너
@@ -564,7 +596,7 @@ $('#updateRestartBtn').addEventListener('click', async () => {
   const ok = await window.native.installUpdate();
   if (!ok) {
     $('#updateRestartBtn').disabled = false;
-    $('#updateRestartBtn').textContent = '🔄 지금 재시작하여 업데이트';
+    $('#updateRestartBtn').textContent = '지금 재시작하여 업데이트';
     alert('업데이트 파일을 찾을 수 없습니다. 다시 로그인하면 새로 내려받습니다.');
     S.updatePrompted = null;
     $('#updateBanner').style.display = 'none';
@@ -689,11 +721,11 @@ function handleDeptDrop(targetFull, e) {
   if (data.startsWith('D|')) {
     const dragged = data.slice(2).split('||').filter(Boolean);
     if (dragged.includes(targetFull)) return;
-    // 과목으로 자동 생성되는 교과 조직은 순서 목록에서 제외 (항상 맨 뒤에 표시됨)
-    const flat = S.deptFlat.filter(d => !dragged.includes(d) && !S.derivedDepts.has(d));
+    // 과목으로 자동 생성되는 '교과-과목' 조직도 함께 순서를 정함 (정하지 않은 교과는 맨 뒤)
+    const flat = S.deptFlat.filter(d => !dragged.includes(d));
     let ti = flat.indexOf(targetFull);
     if (ti < 0) ti = flat.length;
-    flat.splice(ti, 0, ...dragged.filter(d => !S.derivedDepts.has(d)));
+    flat.splice(ti, 0, ...dragged);
     send({ type: 'set_dept_order', order: flat });
   } else if (data.startsWith('U|')) {
     const [, uid, fromDept] = data.split('|');
@@ -750,7 +782,7 @@ function buildDeptHeader(fullNames, label, users, level, collapseKey, q) {
     dv.prepend(dchk);
     const mb = document.createElement('button');
     mb.className = 'dept-msg';
-    mb.textContent = '✉';
+    mb.innerHTML = '<span class="msi">mail</span>';
     mb.title = `'${label}' 전체에게 쪽지 보내기 (${others.length}명)`;
     mb.onclick = (e) => { e.stopPropagation(); openCompose(others); };
     dv.appendChild(mb);
@@ -759,7 +791,7 @@ function buildDeptHeader(fullNames, label, users, level, collapseKey, q) {
   makeDraggable(dv, 'D|' + fullNames.join('||'), (ev) => handleDeptDrop(fullNames[0], ev));
   if (S.me.admin) {
     if (fullNames.every(f => S.derivedDepts.has(f))) {
-      dv.title = '교과 조직: 담당 과목 정보로 자동 구성됩니다';
+      dv.title = '교과 조직: 담당 과목 정보로 자동 구성됩니다 (드래그: 순서 변경)';
     } else {
       dv.title = '드래그: 순서 변경 / 우클릭: 부서 관리(이름 변경·추가)';
       dv.oncontextmenu = (e) => { e.preventDefault(); openDeptRenameModal(fullNames.filter(f => !S.derivedDepts.has(f))); };
@@ -885,12 +917,12 @@ function renderTree() {
   }
   S.treeVisible = [];
   S.deptDisplayed = {};
-  // 정렬: 부서 순서 → 부서 내 사용자 지정 순서 → 이름순 ('교과' 조직은 항상 마지막)
-  const flatEntries = [...depts.entries()].sort((a, b) => {
-    const ga = a[0] === '교과' || a[0].startsWith('교과-') ? 1 : 0;
-    const gb = b[0] === '교과' || b[0].startsWith('교과-') ? 1 : 0;
-    return ga - gb || deptSorter(a[0], b[0]);
-  });
+  // 정렬: 부서 순서 → 부서 내 사용자 지정 순서 → 이름순
+  // (관리자가 순서를 정하지 않은 부서는 뒤에, 그중 '교과' 조직은 맨 뒤)
+  const isSubject = (d) => d === '교과' || d.startsWith('교과-');
+  const deptRank = (d) => { const i = S.deptOrder.indexOf(d); return i >= 0 ? i : (isSubject(d) ? 20000 : 10000); };
+  const flatEntries = [...depts.entries()].sort((a, b) =>
+    deptRank(a[0]) - deptRank(b[0]) || a[0].localeCompare(b[0], 'ko'));
   S.deptFlat = flatEntries.map(e => e[0]);
   for (const [dept, users] of flatEntries) {
     const uo = (S.userOrder || {})[dept] || [];
@@ -1097,7 +1129,7 @@ function msgItem(m, mode) {
       ? nameOf(m.from)
       : m.to.map(nameOf).slice(0, 2).join(', ') + (m.to.length > 2 ? ` 외 ${m.to.length - 2}명` : ''));
   const avId = mode === 'inbox' ? m.from : m.to[0];
-  const clip = m.attachments.length ? '<span class="clip">📎</span> ' : '';
+  const clip = m.attachments.length ? '<span class="clip msi">attach_file</span> ' : '';
   const readInfo = mode === 'sent'
     ? `<span class="readmark">읽음 ${m.readBy.length}/${m.to.length}</span>` : '';
   // 안 읽은 쪽지는 [NEW] 라벨 + 색으로 한눈에 띄게 표시
@@ -1117,11 +1149,11 @@ function msgItem(m, mode) {
   // 여러 사람이 함께 받은 쪽지면 그 사람들로 바로 사용자 그룹을 만들 수 있게
   const group = msgParticipants(m);
   btns.innerHTML = `
-    ${mode === 'inbox' ? '<button data-a="reply" title="답장">↩ 답장</button>' : ''}
-    ${peerId ? `<button data-a="chat" title="${esc(nameOf(peerId))} 님과 대화">💬</button>` : ''}
-    ${group.length >= 2 ? `<button data-a="group" title="이 쪽지를 주고받은 ${group.length}명으로 사용자 그룹 만들기">👥</button>` : ''}
-    <button data-a="fwd" title="전달">➦ 전달</button>
-    <button data-a="del" class="danger-text" title="삭제">✕</button>`;
+    ${mode === 'inbox' ? '<button data-a="reply" title="답장"><span class="msi">reply</span>답장</button>' : ''}
+    ${peerId ? `<button data-a="chat" class="icon-only" title="${esc(nameOf(peerId))} 님과 대화"><span class="msi">chat</span></button>` : ''}
+    ${group.length >= 2 ? `<button data-a="group" class="icon-only" title="이 쪽지를 주고받은 ${group.length}명으로 사용자 그룹 만들기"><span class="msi">group_add</span></button>` : ''}
+    <button data-a="fwd" title="전달"><span class="msi">forward</span>전달</button>
+    <button data-a="del" class="danger-text icon-only" title="삭제"><span class="msi">delete</span></button>`;
   btns.onclick = (e) => {
     e.stopPropagation();
     const b = e.target.closest('button');
@@ -1678,8 +1710,8 @@ function renderNotices() {
         ? ' <span style="color:#c62828">📊마감·결과 공개</span>'
         : ' <span style="color:#1565c0">📊설문 진행 중</span>')
       : '';
-    const clipBadge = (n.attachments || []).length ? ' <span class="clip">📎</span>' : '';
-    el.innerHTML = `<span class="type-chip tc-notice">공지</span><span class="who">📢 ${esc(n.authorName)}</span>
+    const clipBadge = (n.attachments || []).length ? ' <span class="clip msi">attach_file</span>' : '';
+    el.innerHTML = `<span class="type-chip tc-notice">공지</span><span class="who">${esc(n.authorName)}</span>
       <span class="preview"><b>${esc(n.title)}</b>${pollBadge}${clipBadge} — ${esc(n.body.slice(0, 80)) || '(내용 없음)'}</span>
       <span class="when">${fmtTime(n.time)}</span>`;
     el.onclick = () => openNoticeDetail(n);
@@ -1687,7 +1719,7 @@ function renderNotices() {
     if (S.me.admin || n.authorId === S.me.id) {
       const btns = document.createElement('span');
       btns.className = 'msg-actions';
-      btns.innerHTML = `<button data-a="del" class="danger-text" title="삭제">✕</button>`;
+      btns.innerHTML = `<button data-a="del" class="danger-text icon-only" title="삭제"><span class="msi">delete</span></button>`;
       btns.onclick = (e) => {
         e.stopPropagation();
         if (e.target.closest('button') && confirm('이 공지를 삭제할까요?')) {
@@ -1726,20 +1758,29 @@ function renderGroups() {
     return;
   }
   S.closedGroups = S.closedGroups || new Set();
-  for (const g of S.groups) {
+  for (const [gi, g] of S.groups.entries()) {
     const closed = S.closedGroups.has(g.id);
     const el = document.createElement('div');
     el.className = 'group-item';
     el.dataset.id = g.id;
+    el.draggable = true;
     el.innerHTML = `
-      <div class="g-head" title="클릭하면 접기/펼치기">${closed ? '▸' : '▾'} 👥 ${esc(g.name)} <span style="color:#99a;font-weight:normal">(${g.members.length}명)</span></div>
+      <div class="g-head" title="클릭: 접기/펼치기 · 끌어서 놓기: 순서 바꾸기">
+        <span class="msi g-grip">drag_indicator</span>
+        <span class="msi g-fold">${closed ? 'chevron_right' : 'expand_more'}</span>
+        <span class="g-name">${esc(g.name)}</span> <span class="g-cnt">${g.members.length}명</span>
+        <span class="g-move">
+          <button type="button" class="g-up" title="위로" ${gi === 0 ? 'disabled' : ''}><span class="msi">arrow_upward</span></button>
+          <button type="button" class="g-down" title="아래로" ${gi === S.groups.length - 1 ? 'disabled' : ''}><span class="msi">arrow_downward</span></button>
+        </span>
+      </div>
       <div class="g-member-list"></div>
       <div class="g-btns">
-        <button data-act="msg">✉ 전체 쪽지</button>
-        <button data-act="msg-sel" disabled>✉ 선택 쪽지</button>
-        <button data-act="room">💬 채팅방</button>
-        <button data-act="edit">✎</button>
-        <button data-act="del" class="danger-text">✕</button>
+        <button data-act="msg" title="구성원 모두에게 쪽지"><span class="msi">mail</span>전체 쪽지</button>
+        <button data-act="msg-sel" disabled title="고른 사람에게만 쪽지"><span class="msi">mark_email_read</span>선택 쪽지</button>
+        <button data-act="room" title="구성원과 채팅방 만들기"><span class="msi">forum</span>채팅방</button>
+        <button data-act="edit" class="icon-only" title="그룹 수정"><span class="msi">edit</span></button>
+        <button data-act="del" class="danger-text icon-only" title="그룹 삭제"><span class="msi">delete</span></button>
       </div>`;
     // 구성원 개별 표시: 체크박스로 선택, 두 번 클릭 = 대화, 우클릭 = 메뉴
     // 선택 상태는 S.groupChecked에 보존 (새 쪽지 도착 등 재렌더링에도 유지)
@@ -1750,7 +1791,7 @@ function renderGroups() {
     const selBtn = el.querySelector('[data-act=msg-sel]');
     const syncSelBtn = () => {
       selBtn.disabled = !sel.size;
-      selBtn.textContent = sel.size ? `✉ 선택 쪽지(${sel.size})` : '✉ 선택 쪽지';
+      selBtn.innerHTML = '<span class="msi">mark_email_read</span>' + (sel.size ? `선택 쪽지(${sel.size})` : '선택 쪽지');
     };
     for (const mid of g.members) {
       const u = userById(mid);
@@ -1788,6 +1829,44 @@ function renderGroups() {
         showTab('rooms');
       }
     };
+    // 순서 바꾸기: ▲▼ 또는 다른 그룹 위로 끌어 놓기
+    const moveTo = (ids) => {
+      S.groups.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); // 바로 반영하고 서버에 저장
+      renderGroups();
+      send({ type: 'reorder_groups', ids });
+    };
+    const ids = S.groups.map(x => x.id);
+    el.querySelector('.g-up').onclick = (e) => {
+      e.stopPropagation();
+      if (gi > 0) { [ids[gi - 1], ids[gi]] = [ids[gi], ids[gi - 1]]; moveTo(ids); }
+    };
+    el.querySelector('.g-down').onclick = (e) => {
+      e.stopPropagation();
+      if (gi < ids.length - 1) { [ids[gi + 1], ids[gi]] = [ids[gi], ids[gi + 1]]; moveTo(ids); }
+    };
+    el.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', 'G|' + g.id);
+      e.dataTransfer.effectAllowed = 'move';
+      el.classList.add('g-dragging');
+    });
+    el.addEventListener('dragend', () => el.classList.remove('g-dragging'));
+    el.addEventListener('dragover', (e) => {
+      if (!S.draggingGroup && !e.dataTransfer.types.includes('text/plain')) return;
+      e.preventDefault();
+      el.classList.add('drop-target');
+    });
+    el.addEventListener('dragleave', () => el.classList.remove('drop-target'));
+    el.addEventListener('drop', (e) => {
+      e.preventDefault();
+      el.classList.remove('drop-target');
+      const data = e.dataTransfer.getData('text/plain');
+      if (!data.startsWith('G|')) return;
+      const dragId = data.slice(2);
+      if (dragId === g.id) return;
+      const next = ids.filter(id => id !== dragId);
+      next.splice(next.indexOf(g.id), 0, dragId);
+      moveTo(next);
+    });
     el.querySelector('[data-act=edit]').onclick = () => openGroupModal(g);
     el.querySelector('[data-act=del]').onclick = () => {
       if (confirm(`'${g.name}' 그룹을 삭제할까요?`)) send({ type: 'delete_group', id: g.id });
@@ -2104,8 +2183,8 @@ function createMsgWin(key, cls) {
     <div class="mw-head">
       <span class="mw-title"></span>
       <span class="mw-time"></span>
-      <button type="button" class="mw-btn mw-fold" title="접기 / 펴기 (제목줄 두 번 클릭)">—</button>
-      <button type="button" class="mw-btn mw-close" title="닫기 (Esc)">✕</button>
+      <button type="button" class="mw-btn mw-fold" title="접기 / 펴기 (제목줄 두 번 클릭)"><span class="msi">remove</span></button>
+      <button type="button" class="mw-btn mw-close" title="닫기 (Esc)"><span class="msi">close</span></button>
     </div>
     <div class="mw-body">
       <div class="meta mw-meta"></div>
@@ -2215,7 +2294,7 @@ function openDetail(m, mode) {
   if (raiseMsgWin(m.id)) return; // 이미 열려 있는 쪽지면 그 창을 앞으로
 
   const self = isSelfNote(m);
-  const kindLabel = self ? '📝 나에게 보낸 메모' : (mode === 'inbox' ? '📩 받은 쪽지' : '📤 보낸 쪽지');
+  const kindLabel = self ? '<span class="msi">sticky_note_2</span>나에게 보낸 메모' : (mode === 'inbox' ? '<span class="msi">mail</span>받은 쪽지' : '<span class="msi">send</span>보낸 쪽지');
   const who = self ? '' : (mode === 'inbox'
     ? nameOf(m.from)
     : m.to.map(nameOf).slice(0, 2).join(', ') + (m.to.length > 2 ? ` 외 ${m.to.length - 2}명` : ''));
@@ -2290,7 +2369,7 @@ function openNoticeDetail(n) {
 
   const el = createMsgWin(key, 'mw-notice');
   const render = (nn) => {
-    el.querySelector('.mw-title').innerHTML = `<b>📢 공지</b> — ${esc(nn.title)}`;
+    el.querySelector('.mw-title').innerHTML = `<b><span class="msi">campaign</span>공지</b> — ${esc(nn.title)}`;
     el.querySelector('.mw-time').textContent = fmtTime(nn.time);
     let meta = `작성자: ${esc(nn.authorName)}<br>시각: ${fmtFull(nn.time)}`;
     if (nn.edited) meta += `<br><span style="color:#e67e22">✏ 수정됨: ${fmtFull(nn.edited)}${nn.editedBy ? ' (' + esc(nn.editedBy) + ')' : ''}</span>`;
@@ -3345,7 +3424,21 @@ $('#signupSubmit').addEventListener('click', () => {
 // ---------- 프로그램 정보 ----------
 $('#aboutBtn').addEventListener('click', async () => {
   $('#aboutVersion').textContent = 'v' + await window.native.getVersion();
+  $('#aboutUpdMsg').textContent = '';
+  $('#aboutGhLink').style.display = S.updateRepo ? '' : 'none';
   $('#aboutModal').style.display = 'flex';
+});
+$('#aboutCheckBtn').addEventListener('click', async () => {
+  const btn = $('#aboutCheckBtn');
+  btn.disabled = true;
+  $('#aboutUpdMsg').textContent = '확인 중…';
+  $('#aboutUpdMsg').textContent = await checkClientUpdate(true);
+  btn.disabled = false;
+});
+$('#aboutGhLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  // 기본 브라우저로 릴리스 페이지 열기 (직접 내려받아 설치할 때)
+  window.open(S.updatePage || `https://github.com/${S.updateRepo}/releases/latest`);
 });
 $('#aboutClose').addEventListener('click', () => { $('#aboutModal').style.display = 'none'; });
 
@@ -3493,7 +3586,7 @@ for (const [modalId, closeSel] of Object.entries(MODAL_CLOSE_BTN)) {
   x.type = 'button';
   x.className = 'modal-x';
   x.title = '닫기';
-  x.textContent = '✕';
+  x.innerHTML = '<span class="msi">close</span>';
   x.addEventListener('click', () => $(closeSel).click());
   modal.prepend(x);
 }

@@ -17,7 +17,7 @@ function esc(s) {
 let onlineSet = new Set();
 let lastUsers = [];
 
-// ---------- 좌측 메뉴 트리 ----------
+// ---------- 좌측 메뉴 ----------
 document.querySelectorAll('.nav-item').forEach(item => {
   item.addEventListener('click', () => {
     document.querySelectorAll('.nav-item').forEach(x => x.classList.toggle('active', x === item));
@@ -26,7 +26,22 @@ document.querySelectorAll('.nav-item').forEach(item => {
   });
 });
 
+// 스크롤하면 지금 보고 있는 카드의 메뉴를 강조
+$('main').addEventListener('scroll', () => {
+  const m = $('main');
+  const items = [...document.querySelectorAll('.nav-item')];
+  const top = m.getBoundingClientRect().top;
+  let cur = items[0];
+  for (const item of items) {
+    const sec = document.getElementById(item.dataset.target);
+    if (sec && sec.getBoundingClientRect().top - top <= 80) cur = item;
+  }
+  if (m.scrollTop + m.clientHeight >= m.scrollHeight - 4) cur = items[items.length - 1];
+  items.forEach(x => x.classList.toggle('active', x === cur));
+}, { passive: true });
+
 function renderStatus(s) {
+  if (!s) return;
   $('#statusBadge').textContent = s.running ? '실행 중' : '중지됨';
   $('#statusBadge').className = 'badge ' + (s.running ? 'on' : 'off');
   const addrs = (s.ips.length ? s.ips : ['127.0.0.1']).map(ip => ip + ':' + (s.port ?? '-'));
@@ -37,9 +52,11 @@ function renderStatus(s) {
   onlineSet = new Set(s.online);
 }
 
+// ---------- 사용자 목록 ----------
 function renderUsers(users) {
+  if (!users) return;
   lastUsers = users;
-  // 이미 등록된 부서/학년을 선택할 수 있게 제공
+  // 이미 등록된 부서/학년을 고를 수 있게 제공
   $('#fDeptList').innerHTML =
     [...new Set(users.filter(u => u.id !== 'admin').flatMap(u => u.depts || [u.dept]))]
       .sort((a, b) => a.localeCompare(b, 'ko'))
@@ -49,21 +66,27 @@ function renderUsers(users) {
   tb.innerHTML = '';
   for (const u of users) {
     const deptsStr = (u.depts || [u.dept]).join(', ');
-    if (q && !(u.id.toLowerCase().includes(q) || u.name.toLowerCase().includes(q) ||
-               deptsStr.toLowerCase().includes(q) || (u.position || '').toLowerCase().includes(q))) continue;
+    const hay = [u.id, u.name, deptsStr, u.position, u.subject, u.office, u.phone, u.mobile, u.email].join(' ').toLowerCase();
+    if (q && !hay.includes(q)) continue;
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><span class="dot ${u.online ? 'on' : 'off'}"></span></td>
+      <td><span class="dot ${u.online ? 'on' : 'off'}" title="${u.online ? '접속 중' : '미접속'}"></span></td>
       <td>${esc(u.id)}</td>
-      <td>${esc(u.name)}</td>
+      <td class="td-name">${esc(u.name)}</td>
       <td>${esc(deptsStr)}</td>
       <td>${esc(u.position)}</td>
-      <td>${u.admin ? '관리자' : '일반'}</td>
-      <td>
-        <button class="mini" data-act="edit" data-id="${esc(u.id)}">수정·비밀번호</button>
-        ${u.id !== 'admin' ? `<button class="mini danger" data-act="del" data-id="${esc(u.id)}">삭제</button>` : ''}
+      <td class="td-sub">${esc(u.subject || '')}</td>
+      <td class="td-sub">${esc(u.phone || '')}</td>
+      <td><span class="role-chip ${u.admin ? 'admin' : ''}">${u.admin ? '관리자' : '일반'}</span></td>
+      <td style="text-align:right">
+        <button class="row-btn" data-act="edit" data-id="${esc(u.id)}" title="세부 정보·비밀번호 수정"><span class="msi">edit</span></button>
+        ${u.id !== 'admin' ? `<button class="row-btn danger" data-act="del" data-id="${esc(u.id)}" title="계정 삭제"><span class="msi">delete</span></button>` : ''}
       </td>`;
+    tr.addEventListener('dblclick', () => openUserModal(u));
     tb.appendChild(tr);
+  }
+  if (!tb.children.length) {
+    tb.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#747775">${q ? '검색 결과가 없습니다' : '등록된 사용자가 없습니다'}</td></tr>`;
   }
 }
 
@@ -72,34 +95,73 @@ async function refresh() {
   renderUsers(await window.api.getUsers());
 }
 
-// 계정 수정 모달 (Electron은 window.prompt를 지원하지 않으므로 자체 모달 사용)
-function openEditModal(u) {
-  $('#editId').textContent = u.id;
-  $('#eName').value = u.name;
-  $('#eDept').value = (u.depts || [u.dept]).join(', ');
-  $('#ePos').value = u.position || '';
-  $('#eAdmin').checked = !!u.admin;
+// ---------- 계정 추가/수정 모달 (세부 정보 포함) ----------
+// (Electron은 window.prompt를 지원하지 않으므로 자체 모달 사용)
+const DETAIL_FIELDS = [['eSubject', 'subject'], ['eOffice', 'office'], ['ePhone', 'phone'], ['eMobile', 'mobile'], ['eEmail', 'email']];
+let editingId = null; // null = 새 계정
+
+function openUserModal(u) {
+  editingId = u ? u.id : null;
+  $('#editTitle').textContent = u ? `계정 수정 — ${u.name}` : '계정 추가';
+  $('#eId').value = u ? u.id : '';
+  $('#eId').readOnly = !!u;
+  $('#ePwLabel').textContent = u ? '새 비밀번호' : '초기 비밀번호';
+  $('#ePw').placeholder = u ? '비워 두면 그대로' : '비워 두면 1234';
   $('#ePw').value = '';
+  $('#eName').value = u ? u.name : '';
+  $('#eDept').value = u ? (u.depts || [u.dept]).join(', ') : '';
+  $('#ePos').value = u ? u.position || '' : '';
+  for (const [el, key] of DETAIL_FIELDS) $('#' + el).value = u ? u[key] || '' : '';
+  $('#eAdmin').checked = !!(u && u.admin);
+  $('#eAdmin').disabled = !!(u && u.id === 'admin'); // 기본 관리자 계정은 권한을 뺄 수 없음
+  $('#editError').textContent = '';
   $('#editModal').style.display = 'flex';
-  $('#eName').focus();
+  (u ? $('#eName') : $('#eId')).focus();
 }
+
+// 전화번호 자동 하이픈 (숫자만 입력해도 062-000-0000 형태로)
+function formatPhone(v) {
+  const d = String(v).replace(/\D/g, '');
+  if (!d || /[^\d\s()+-]/.test(v)) return v; // 문구가 섞여 있으면 그대로
+  if (d.startsWith('02')) {
+    if (d.length <= 9) return d.slice(0, 2) + '-' + d.slice(2, d.length - 4) + '-' + d.slice(-4);
+    return d.slice(0, 2) + '-' + d.slice(2, 6) + '-' + d.slice(6, 10);
+  }
+  if (d.length < 9) return v;
+  if (d.length <= 10) return d.slice(0, 3) + '-' + d.slice(3, d.length - 4) + '-' + d.slice(-4);
+  return d.slice(0, 3) + '-' + d.slice(3, 7) + '-' + d.slice(7, 11);
+}
+for (const id of ['#ePhone', '#eMobile']) $(id).addEventListener('blur', (e) => { e.target.value = formatPhone(e.target.value.trim()); });
 
 $('#editCancel').addEventListener('click', () => { $('#editModal').style.display = 'none'; });
 $('#editSave').addEventListener('click', async () => {
-  const id = $('#editId').textContent;
+  const data = {
+    name: $('#eName').value.trim(),
+    dept: $('#eDept').value,
+    position: $('#ePos').value,
+    admin: $('#eAdmin').checked
+  };
+  for (const [el, key] of DETAIL_FIELDS) data[key] = $('#' + el).value.trim();
   try {
-    renderUsers(await window.api.updateUser(id, {
-      name: $('#eName').value,
-      dept: $('#eDept').value,
-      position: $('#ePos').value,
-      admin: $('#eAdmin').checked
-    }));
-    const pw = $('#ePw').value;
-    if (pw) await window.api.resetPw(id, pw);
+    if (!data.name) throw new Error('이름을 입력하세요.');
+    if (editingId) {
+      renderUsers(await window.api.updateUser(editingId, data));
+      const pw = $('#ePw').value;
+      if (pw) await window.api.resetPw(editingId, pw);
+    } else {
+      renderUsers(await window.api.addUser({ id: $('#eId').value.trim(), pw: $('#ePw').value || '1234', ...data }));
+    }
     $('#editModal').style.display = 'none';
     refresh();
-  } catch (err) { alert(err.message); }
+    renderDeptOrder();
+  } catch (err) { $('#editError').textContent = err.message; }
 });
+$('#editModal').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT') $('#editSave').click();
+  if (e.key === 'Escape') $('#editModal').style.display = 'none';
+});
+
+$('#addBtn').addEventListener('click', () => openUserModal(null));
 
 $('#userTable').addEventListener('click', async (e) => {
   const btn = e.target.closest('button');
@@ -110,23 +172,11 @@ $('#userTable').addEventListener('click', async (e) => {
       if (!confirm(`'${id}' 계정을 삭제할까요?`)) return;
       renderUsers(await window.api.deleteUser(id));
       refresh();
-    } else if (btn.dataset.act === 'edit' || btn.dataset.act === 'pw') {
+    } else if (btn.dataset.act === 'edit') {
       const users = await window.api.getUsers();
       const u = users.find(x => x.id === id);
-      if (u) openEditModal(u);
+      if (u) openUserModal(u);
     }
-  } catch (err) { alert(err.message); }
-});
-
-$('#addBtn').addEventListener('click', async () => {
-  try {
-    renderUsers(await window.api.addUser({
-      id: $('#fId').value, name: $('#fName').value, dept: $('#fDept').value,
-      position: $('#fPos').value, pw: $('#fPw').value || '1234', admin: $('#fAdmin').checked
-    }));
-    for (const s of ['#fId', '#fName', '#fDept', '#fPos', '#fPw']) $(s).value = '';
-    $('#fAdmin').checked = false;
-    refresh();
   } catch (err) { alert(err.message); }
 });
 
@@ -144,8 +194,11 @@ $('#bulkBtn').addEventListener('click', async () => {
 
 $('#portBtn').addEventListener('click', async () => {
   try {
-    renderStatus(await window.api.setPort($('#portInput').value));
-    alert('포트가 변경되었습니다. 클라이언트도 새 포트로 접속해야 합니다.');
+    const st = await window.api.setPort($('#portInput').value);
+    renderStatus(st);
+    alert(st.restarting
+      ? `포트를 ${st.port}(으)로 바꾸고 서버를 다시 시작합니다. 잠시 뒤 새 주소로 이동합니다.\n교직원 메신저도 새 포트로 접속해야 합니다.`
+      : '포트가 변경되었습니다. 클라이언트도 새 포트로 접속해야 합니다.');
   } catch (err) { alert(err.message); }
 });
 
@@ -165,6 +218,7 @@ $('#csvImportBtn').addEventListener('click', async () => {
       `가져오기: 성공 ${r.result.ok}건` +
       (r.result.errors.length ? `<br>실패:<br>${r.result.errors.map(esc).join('<br>')}` : '');
     refresh();
+    renderDeptOrder();
   } catch (err) { alert(err.message); }
 });
 
@@ -228,37 +282,46 @@ $('#autostartChk').addEventListener('change', async (e) => {
 window.api.getAutostart().then(on => { $('#autostartChk').checked = on; });
 
 // ---------- 부서(그룹) 표시 순서 ----------
+// 담당 과목으로 자동으로 생기는 '교과-과목' 그룹도 함께 순서를 정할 수 있다 (메신저 조직도와 같은 규칙)
 async function renderDeptOrder() {
   const users = await window.api.getUsers();
   const saved = await window.api.getDeptOrder();
   const extra = await window.api.getExtraDepts();
   const counts = new Map();
+  const derived = new Set();
+  const bump = (d) => counts.set(d, (counts.get(d) || 0) + 1);
   for (const u of users) {
     if (u.id === 'admin') continue;
-    // 다중 부서 소속을 모두 반영
-    for (const d of (u.depts && u.depts.length ? u.depts : [u.dept])) {
-      counts.set(d, (counts.get(d) || 0) + 1);
+    const depts = u.depts && u.depts.length ? u.depts : [u.dept];
+    for (const d of depts) bump(d); // 다중 부서 소속을 모두 반영
+    if (u.subject) {
+      const dd = '교과-' + u.subject;
+      if (!depts.includes(dd)) { bump(dd); derived.add(dd); }
     }
   }
-  // 클라이언트에서 추가한 빈 부서(소속 인원 0명)도 순서를 조정할 수 있게 포함
+  // 메신저에서 추가한 빈 부서(소속 인원 0명)도 순서를 조정할 수 있게 포함
   for (const d of extra) if (!counts.has(d)) counts.set(d, 0);
+  const isSubject = (d) => d === '교과' || d.startsWith('교과-');
   const depts = [...counts.keys()];
-  // 저장된 순서 우선, 새로 생긴 부서는 뒤에 가나다순
+  // 저장된 순서 우선, 새로 생긴 부서는 뒤에 가나다순 (교과 그룹은 맨 뒤)
   const ordered = [
     ...saved.filter(d => counts.has(d)),
-    ...depts.filter(d => !saved.includes(d)).sort((a, b) => a.localeCompare(b, 'ko'))
+    ...depts.filter(d => !saved.includes(d)).sort((a, b) =>
+      (isSubject(a) ? 1 : 0) - (isSubject(b) ? 1 : 0) || a.localeCompare(b, 'ko'))
   ];
   const box = $('#deptOrderList');
   box.innerHTML = '';
   ordered.forEach((d, i) => {
     const row = document.createElement('div');
-    row.className = 'dept-order-row';
+    row.className = 'dept-order-row' + (derived.has(d) ? ' derived' : '');
     row.draggable = true;
-    row.title = '드래그해서 순서를 바꿀 수 있습니다';
-    row.innerHTML = `<span class="do-grip">⠿</span><span class="do-name">${i + 1}. ${esc(d)}</span>
+    row.title = '끌어서 순서를 바꿀 수 있습니다';
+    const label = d.includes('-') ? d.replace('-', ' › ') : d;
+    row.innerHTML = `<span class="msi do-grip">drag_indicator</span><span class="do-name">${i + 1}. ${esc(label)}</span>
+      ${derived.has(d) ? '<span class="do-tag" title="교직원의 담당 과목으로 자동 구성">과목 자동</span>' : ''}
       <span class="do-cnt">${counts.get(d) ? counts.get(d) + '명' : '비어 있음'}</span>
-      <button data-dir="-1" ${i === 0 ? 'disabled' : ''}>▲</button>
-      <button data-dir="1" ${i === ordered.length - 1 ? 'disabled' : ''}>▼</button>`;
+      <button data-dir="-1" ${i === 0 ? 'disabled' : ''} title="위로"><span class="msi">arrow_upward</span></button>
+      <button data-dir="1" ${i === ordered.length - 1 ? 'disabled' : ''} title="아래로"><span class="msi">arrow_downward</span></button>`;
     row.querySelectorAll('button').forEach(b => b.onclick = async () => {
       const j = i + Number(b.dataset.dir);
       [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
@@ -355,25 +418,100 @@ $('#aboutBtn').addEventListener('click', async () => {
   $('#aboutModal').style.display = 'flex';
 });
 $('#aboutClose').addEventListener('click', () => { $('#aboutModal').style.display = 'none'; });
+window.api.getAppVersion().then(v => { $('#verTile').textContent = 'v' + v; });
+$('#webLogoutBtn').addEventListener('click', () => window.api.webLogout && window.api.webLogout());
 
-// ---------- 클라이언트 자동 업데이트 ----------
-async function refreshClientUpdate() {
-  const u = await window.api.getClientUpdate();
-  $('#updVersion').textContent = u ? 'v' + u.version : '없음';
+// ---------- 프로그램 업데이트 (GitHub + 직접 등록) ----------
+function fmtDateTime(t) {
+  if (!t) return '-';
+  const d = new Date(t), p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
+
+function renderUpdate(st) {
+  if (!st) return;
+  $('#updCur').textContent = 'v' + st.currentVersion;
+  $('#updLatest').textContent = st.latest && st.latest.version ? 'v' + st.latest.version : '-';
+  $('#updVersion').textContent = st.clientRegistered ? 'v' + st.clientRegistered : '없음';
+  $('#updLast').textContent = st.checking ? '확인 중…' : fmtDateTime(st.lastCheck);
+  const msg = $('#updMsg');
+  if (st.error || st.message) {
+    msg.style.display = '';
+    msg.className = 'notice-box' + (st.error ? ' err' : '');
+    msg.innerHTML = `<span class="msi">${st.error ? 'error' : 'info'}</span><span>${esc(st.error || st.message)}</span>`;
+  } else msg.style.display = 'none';
+  const dl = st.downloading;
+  $('#updProgress').style.display = dl ? '' : 'none';
+  if (dl) {
+    const pct = dl.total ? Math.round(dl.received / dl.total * 100) : 0;
+    $('#updProgress i').style.width = pct + '%';
+    $('#updProgress span').textContent = `${dl.name} 내려받는 중 ${pct}% (${fmtBytes(dl.received)}${dl.total ? ' / ' + fmtBytes(dl.total) : ''})`;
+  }
+  const p = st.pending;
+  $('#updPendingRow').style.display = p ? '' : 'none';
+  $('#navUpdDot').style.display = p ? '' : 'none';
+  if (p) {
+    $('#updPendingText').textContent = st.installing
+      ? `서버 v${p.version} 을(를) 설치하는 중입니다. 잠시 뒤 서버가 다시 시작됩니다…`
+      : `서버 v${p.version} 업데이트가 준비되었습니다.` +
+        (st.options.autoInstall ? ` 접속한 사람이 없을 때 자동으로 설치합니다 (지금 접속 ${st.online}명).` : '');
+    $('#updInstallBtn').disabled = !!st.installing;
+  }
+  $('#updCheckBtn').disabled = !!st.checking;
+  if (document.activeElement !== $('#updRepo')) $('#updRepo').value = st.options.repo || '';
+  $('#updEnabled').checked = !!st.options.enabled;
+  $('#updAuto').checked = !!st.options.autoInstall;
+  $('#updToken').placeholder = st.options.hasToken ? '저장된 토큰 있음 (바꾸려면 새로 입력)' : '공개 저장소면 비워 두세요';
+  $('#updTokenClear').style.display = st.options.hasToken ? '' : 'none';
+}
+
+async function refreshUpdate() {
+  try { renderUpdate(await window.api.getUpdateState()); } catch (e) {}
+}
+$('#updCheckBtn').addEventListener('click', async () => {
+  $('#updCheckBtn').disabled = true;
+  try { renderUpdate(await window.api.checkUpdate()); }
+  catch (err) { alert(err.message); }
+  finally { refreshUpdate(); }
+});
+$('#updInstallBtn').addEventListener('click', async () => {
+  const online = Number(($('#onlineCount').textContent.match(/\d+/) || [0])[0]);
+  if (!confirm(`지금 서버 업데이트를 설치할까요?\n서버가 잠시(약 1분) 멈췄다가 다시 시작됩니다.` +
+    (online ? `\n지금 접속한 ${online}명은 연결이 끊겼다가 자동으로 다시 연결됩니다.` : ''))) return;
+  try { await window.api.installServerUpdate(); refreshUpdate(); }
+  catch (err) { alert(err.message); }
+});
+async function saveUpdateOptions(extra) {
+  try {
+    const o = { repo: $('#updRepo').value, enabled: $('#updEnabled').checked, autoInstall: $('#updAuto').checked, ...extra };
+    if ($('#updToken').value.trim()) o.token = $('#updToken').value.trim();
+    renderUpdate(await window.api.setUpdateOptions(o));
+    $('#updToken').value = '';
+    return true;
+  } catch (err) { alert(err.message); refreshUpdate(); return false; }
+}
+$('#updSaveBtn').addEventListener('click', async () => { if (await saveUpdateOptions()) alert('업데이트 설정을 저장했습니다.'); });
+$('#updEnabled').addEventListener('change', () => saveUpdateOptions());
+$('#updAuto').addEventListener('change', () => saveUpdateOptions());
+$('#updTokenClear').addEventListener('click', () => {
+  if (confirm('저장된 GitHub 토큰을 지울까요?')) saveUpdateOptions({ token: '' });
+});
 $('#updRegisterBtn').addEventListener('click', async () => {
   try {
     const r = await window.api.registerClientUpdate();
     if (!r) return;
     $('#updVersion').textContent = 'v' + r.version;
-    alert(`클라이언트 v${r.version} 설치파일이 등록되었습니다.\n이전 버전 클라이언트가 로그인하면 자동으로 안내됩니다.`);
+    alert(`클라이언트 v${r.version} 설치파일이 등록되었습니다.\n이전 버전 클라이언트가 로그인하면 자동으로 업데이트됩니다.`);
   } catch (err) { alert(err.message); }
 });
-refreshClientUpdate();
+window.api.onUpdateState?.(renderUpdate);
+refreshUpdate();
+setInterval(refreshUpdate, 15000);
 
 // ---------- 학교 이름 ----------
 function applySchoolName(name) {
-  $('#brandTitle').textContent = '🏫 ' + (name ? name + ' 메신저 서버' : '학교메신저 서버');
+  $('#brandTitle').textContent = name ? name + ' 메신저 서버' : '학교메신저 서버';
+  document.title = $('#brandTitle').textContent;
   if (document.activeElement !== $('#schoolInput')) $('#schoolInput').value = name || '';
 }
 
@@ -397,6 +535,16 @@ window.api.getSettings().then(s => {
     $('#schoolModal').style.display = 'flex';
     $('#schoolFirstInput').focus();
   }
+});
+
+// ---------- 리눅스(웹 관리 화면)에 맞게 문구 바꾸기 ----------
+window.api.getPlatform?.().then(p => {
+  if (p !== 'linux') return;
+  $('#autostartLabel').textContent = '부팅 시 서버 자동 실행';
+  $('#autostartHint').textContent = 'install.sh 로 설치하면 systemd 서비스(school-messenger-server)로 등록되어 부팅 때 자동으로 실행됩니다.';
+  $('#autostartChk').disabled = true;
+  $('#logOpenLb').textContent = '로그 파일 내려받기';
+  $('#dataDirBtn').title = '리눅스 버전은 설정 파일에서 바꿉니다';
 });
 
 window.api.onStatus(renderStatus);
