@@ -52,8 +52,30 @@ schoolmessenger/
 ## 3. 서버 코어 (server.js)
 
 ### 저장소
-- 데이터 폴더(`userData/serverdata/`)에 `data.json`(전체 DB), `uploads/`(첨부), `update/`(클라이언트 업데이트 파일), `activity.log`(활동 로그)
-- 저장은 300ms 디바운스 후 파일 쓰기. 비밀번호는 `sha256(salt + ':' + pw)` 해시로 저장
+- 데이터 폴더(`userData/serverdata/`)에 `data.json`(쪽지·채팅을 뺀 DB: 계정·공지·채팅방·설정…, `storeVersion: 2`),
+  **날짜별 파일** `messages/YYYY-MM-DD.json`·`roommsgs/YYYY-MM-DD.json`(그날 `time` 의 쪽지·채팅 배열, 서버 PC 현지 날짜),
+  `uploads/`(첨부), `update/`(클라이언트 업데이트 파일), `activity.log`(활동 로그). 비밀번호는 `sha256(salt + ':' + pw)` 해시
+- **저장 성능이 핵심** (메모리 4GB 서버에서 실제로 문제가 됨): 예전처럼 전체 DB 를 한 파일로 `JSON.stringify(…, null, 1)` + `writeFileSync` + `fsync` + `.bak` 복사를
+  매번 동기로 하면, 한 학기 분량(쪽지 4만·채팅 2만, 약 67MB)에서 저장 한 번에 이벤트 루프가 **약 2초** 멈춰 채팅·로그인이 끊긴다. 그래서
+  - `_saveSoon(...what)`: 인자 없음 = data.json, 쪽지/채팅 객체 = 그 날짜 파일(roomId 가 있으면 채팅), `'all'` = 전부 다시 확인. 300ms 모아서 저장.
+    쪽지·채팅을 바꾸는 곳(보내기·읽음·삭제·회수·채팅·수정·설문 투표/마감·채팅방 안내·방 삭제)은 반드시 그 객체를 넘긴다. 보관 기간 정리는 `'all'`
+  - 비동기 저장(`_saveAsync`, 한 번에 하나): 바뀐 날짜만 묶어 압축 JSON 으로 만들고, 마지막으로 쓴 내용의 SHA-1 과 같으면 건너뜀.
+    파일마다 `fs.promises` 로 임시 파일(`.tmp-N`)에 쓰고 `sync` → (동기) 본 파일을 `.bak` 으로 rename → 임시 파일을 본 파일로 rename. 파일 하나마다 `setImmediate` 로 양보.
+    비게 된 날짜는 파일 삭제. data.json 은 마지막에
+  - `saveNow()`(종료·백업·복원 직전, 동기): 전부 확인해 바뀐 파일만 씀. `_saveGen` 을 올려 진행 중인 비동기 저장은 rename 하지 않고 버리게 한다(옛 내용으로 덮어쓰기 방지)
+  - `stop()`: 저장 예약 금지(`_stopped`) → 진행 중 비동기 저장을 기다림 → `saveNow()`. 10분마다 `'all'` 확인(빠뜨린 표시 대비, 바뀐 파일만 씀)
+  - 불러오기: 각 날짜 파일(안 되면 `.bak`, 손상 파일은 `.corrupt-시각` 으로 보관하고 관리자 안내), 남은 `.tmp-*` 삭제.
+    data.json 에 `messages`/`roomMsgs` 배열이 있으면(1.0.0 이하 형식, 또는 이전 버전으로 되돌렸다가 쓴 경우) 같은 id 는 날짜 파일 쪽을 쓰고 나머지를 합친 뒤
+    그 날짜들을 저장 대상으로 표시 → 백그라운드로 옮김. 처음 옮길 때 원본을 `data.json.before-1.0.1` 로 복사해 둔다
+  - 백업은 data.json + 날짜별 폴더(본 파일만) + uploads, 복원은 지금 날짜별 폴더를 지운 뒤 복사(섞임 방지)
+- 활동 로그는 `appendFileSync` 대신 `fs.promises.appendFile` 로 백그라운드 이어 쓰기(쓰는 동안 생긴 줄은 모아서 한 번에, 순서 유지).
+  파일을 계속 열어 두면 메모장·.NET 등이 '다른 프로세스가 사용 중'으로 못 여니 쓰기마다 닫는다. 첨부 업로드(`/upload`)는 메모리에 모으지 않고
+  `req.pipe(createWriteStream('<id>.part'))` → 다 받으면 rename (Content-Length 나 받은 양이 200MB 를 넘으면 413). 용량 집계 `getStorage()` 는 비동기
+- 서버 관리 앱(Electron): 빌드 폴더(`win-unpacked`)에서 켠 것은 시작 프로그램에 등록하지 않음. 설치된 서버는 시작 때 레지스트리 Run 의
+  `electron.app.<exe 이름>` 값을 읽어(Electron launchItems 는 경로가 다른 항목을 안 보여 줌, app.getName() 은 package.json name 이라 다름)
+  빌드 폴더이거나 없어진 경로를 가리키면 `setLoginItemSettings({ openAtLogin: true, name })` 로 바로잡는다.
+  서버 관리 앱(Electron): `app.disableHardwareAcceleration()`, 창을 닫으면 숨기지 않고 없앰(렌더러 메모리 반환, 트레이·두 번째 실행으로 다시 만듦),
+  관리 화면의 주기적 새로고침은 `document.hidden` 이면 건너뛰고 다시 보일 때 한 번에 새로고침
 
 ### 데이터 모델 (data.json)
 ```
@@ -206,6 +228,8 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 - 연결 끊기면 "재접속 중" 배너 + 4초 간격 자동 재접속
 
 ### 메인 화면 구성
+- 쪽지·공지·채팅방 목록 줄(`.msg-item`)은 `content-visibility: auto; contain-intrinsic-size: auto 56px` (마우스를 올리면 visible — 그림자 잘림 방지).
+  쪽지 500개 목록의 배치 계산이 0.35초 → 0.01초로 줄어 로그인·탭 전환이 빨라진다
 - 헤더: 학교 이름, 내 정보 요약, 상태 선택(🟢온라인/🟡자리비움/🔴수업중/🟠회의중), 설정/내 정보/정보/로그아웃(확인창)
 - **왼쪽 사이드바** — [조직도 | 사용자 그룹] 탭:
   - 조직도: 검색, 전체 선택 바(N명 선택 시 ✉쪽지/👥그룹 만들기/✕해제), 부서 접기/펼치기,
@@ -336,6 +360,9 @@ settings: { retentionDays, deptOrder[], userOrder{dept:[ids]}, extraDepts[](빈 
 
 ## 6. 검증 (필수)
 
+- **성능 시험**: 쪽지 4만·채팅 2만·첨부 3천 개(교직원 100명 한 학기)의 큰 데이터를 만들어 저장 1회 이벤트 루프 멈춤, 로그인 응답, 채팅 왕복(저장이 겹칠 때),
+  1.0.0 형식 자동 옮기기 동안의 멈춤을 잰다 (목표: 멈춤 100ms 미만). 저장 방식은 옮기기·다시 시작·바뀐 날짜만 쓰기·손상 파일 .bak 복구·
+  저장 중 동기 저장 끼어들기·백업/복원(예전 형식 백업 포함)·업로드 흘려 쓰기(401/413)까지 자동 시험
 - 서버 코어를 단독 node로 띄워 WebSocket 자동 테스트 작성: 로그인/거부/kick, 쪽지 송수신/읽음/회수(읽은 뒤 회수·남의 쪽지 차단)/
   나에게 보내기(읽음 처리·중복 전달 없음)/삭제, 예약 쪽지·공지,
   설문 투표/마감/복수선택/투표취소/익명 설문의 투표자 비노출/예전 형식 마이그레이션, 채팅방 설문(비멤버 차단),

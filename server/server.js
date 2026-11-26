@@ -22,6 +22,24 @@ const MAX_TEXT_LEN = 20000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
 const INIT_MSG_LIMIT = 500; // 로그인 시 내려주는 최근 쪽지 수
 
+// 저장 방식 (1.0.1~): 쪽지·채팅은 날짜별 파일, 나머지(계정·공지·채팅방·설정…)는 data.json
+//   serverdata/data.json, serverdata/messages/2026-11-27.json, serverdata/roommsgs/2026-11-27.json
+//  — 한 학기만 써도 data.json 이 수십 MB 가 되어, 채팅 한 줄마다 전체를 다시 쓰느라 서버가 몇 초씩 멈췄다.
+//    이제는 바뀐 날짜의 파일만, 이벤트 루프를 막지 않고(비동기) 쓴다.
+const CHUNK_DIRS = { messages: 'messages', roomMsgs: 'roommsgs' };
+const STORE_VERSION = 2;
+const SAVE_DELAY = 300;            // 변경 후 저장까지 (여러 변경을 한 번에 모아 씀)
+const SWEEP_INTERVAL = 10 * 60000; // 빠뜨린 변경이 없는지 전체 확인 (바뀐 파일만 씀)
+
+function dayKey(t) {
+  const d = new Date(Number(t) || 0);
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+}
+function textHash(text) {
+  return crypto.createHash('sha1').update(text).digest('base64');
+}
+
 function hashPw(pw, salt) {
   return crypto.createHash('sha256').update(salt + ':' + pw).digest('hex');
 }
@@ -118,7 +136,20 @@ class MessengerServer {
     fs.mkdirSync(this.updateDir, { recursive: true });
     this.clientUpdate = this._loadClientUpdate();
     this.logs = []; // 최근 로그 (메모리), 전체 기록은 activity.log 파일
+    this._logBuf = [];
+    this._logFlushing = false;
+    // 저장 상태: 바뀐 부분(dirty), 마지막으로 쓴 내용의 해시(같으면 다시 쓰지 않음), 진행 중 여부
+    this._dirty = this._emptyDirty();
+    this._mainHash = '';
+    this._chunkHash = { messages: new Map(), roomMsgs: new Map() };
+    this._saving = false;
+    this._saveAgain = false;
+    this._saveGen = 0;     // 동기 저장(saveNow)이 끼어들면 증가 → 진행 중이던 비동기 저장은 파일을 바꾸지 않고 멈춤
+    this._tmpSeq = 0;
+    this._sweepNeeded = false;
+    this.saveStats = { last: 0, lastMs: 0, files: 0, maxMs: 0 };
     this.db = this._loadDb();
+    this._loadChunks();
     this.sockets = new Map(); // userId -> ws
     this.tokens = new Map();  // token -> userId
     this.status = new Map();  // userId -> 'online' | 'away' | 'class' | 'meeting'
@@ -131,6 +162,8 @@ class MessengerServer {
     this.httpHooks = [];        // start() 때 추가로 붙일 HTTP 경로 (리눅스 웹 관리 화면 등): (app) => {}
     this._saveTimer = null;
     this.onStatusChange = null; // 관리 UI 갱신 콜백
+    // 예전 형식(data.json 하나)에서 옮겨 왔거나 백업 파일로 복구했으면 곧 새 형식으로 저장
+    if (this._hasDirty()) this._scheduleSave();
   }
 
   // ---------- DB ----------
@@ -211,41 +244,264 @@ class MessengerServer {
       signups: []
     };
     fs.mkdirSync(this.dataDir, { recursive: true });
-    this._writeDb(db);
+    this._writeAtomicSync(this.dbFile, this._mainText(db));
     return db;
   }
 
-  // 원자적 저장: 임시 파일에 쓰고 디스크에 반영한 뒤 교체 (쓰기 중 종료돼도 기존 파일이 온전함)
-  _writeDb(db) {
-    const tmp = this.dbFile + '.tmp';
-    const json = JSON.stringify(db, null, 1);
+  // 날짜별 쪽지·채팅 파일 불러오기 + data.json 안에 있던 예전 형식 목록 합치기
+  //  (같은 id 가 둘 다 있으면 날짜 파일 쪽을 씀 — 예전 형식 data.json 은 옮겨 온 뒤 목록을 빼고 다시 저장된다)
+  _loadChunks() {
+    const recovered = [];
+    for (const kind of Object.keys(CHUNK_DIRS)) {
+      const dir = path.join(this.dataDir, CHUNK_DIRS[kind]);
+      fs.mkdirSync(dir, { recursive: true });
+      const names = fs.readdirSync(dir);
+      for (const f of names) {
+        if (/\.tmp-/.test(f)) { try { fs.unlinkSync(path.join(dir, f)); } catch (e) {} } // 쓰다 만 임시 파일
+      }
+      const keys = [...new Set(names.map(f => (/^(\d{4}-\d{2}-\d{2})\.json(\.bak)?$/.exec(f) || [])[1]).filter(Boolean))].sort();
+      let fromFiles = [];
+      for (const key of keys) {
+        const file = path.join(dir, key + '.json');
+        let items = null;
+        for (const f of [file, file + '.bak']) {
+          if (!fs.existsSync(f)) continue;
+          try {
+            const text = fs.readFileSync(f, 'utf8');
+            const arr = JSON.parse(text);
+            if (!Array.isArray(arr)) throw new Error('형식 오류');
+            items = arr;
+            if (f === file) this._chunkHash[kind].set(key, textHash(text));
+            else this._dirty[kind].add(key); // 백업으로 복구 → 곧 본 파일을 다시 씀
+            break;
+          } catch (e) {
+            console.error(`${CHUNK_DIRS[kind]}/${path.basename(f)} 을(를) 읽을 수 없습니다:`, e.message);
+          }
+        }
+        if (items === null || !this._chunkHash[kind].has(key)) {
+          if (fs.existsSync(file)) {
+            const keep = file + '.corrupt-' + Date.now();
+            try { fs.renameSync(file, keep); } catch (e) {}
+            recovered.push(`${CHUNK_DIRS[kind]}/${key}.json` + (items ? ' (백업으로 복구)' : ' (읽을 수 없음, 보관)'));
+          }
+        }
+        if (items) fromFiles = fromFiles.concat(items);
+      }
+      const legacy = Array.isArray(this.db[kind]) ? this.db[kind] : [];
+      if (legacy.length && !keys.length && fs.existsSync(this.dbFile) && !fs.existsSync(this.dbFile + '.before-1.0.1')) {
+        // 처음 옮길 때 예전 data.json 을 그대로 하나 남겨 둔다 (.bak 은 다음 저장 때 바뀌므로)
+        try { fs.copyFileSync(this.dbFile, this.dbFile + '.before-1.0.1'); } catch (e) {}
+      }
+      if (legacy.length) {
+        const ids = new Set(fromFiles.map(m => m.id));
+        const extra = legacy.filter(m => !ids.has(m.id));
+        for (const m of extra) this._dirty[kind].add(dayKey(m.time));
+        fromFiles = fromFiles.length ? fromFiles.concat(extra).sort((a, b) => (a.time || 0) - (b.time || 0)) : extra;
+        this._dirty.main = true; // data.json 에서 목록을 빼고 다시 저장
+      }
+      this.db[kind] = fromFiles;
+    }
+    // 채팅방 설문 정리 (예전 형식 투표 → 배열)
+    for (const m of this.db.roomMsgs) {
+      if (!m.poll) continue;
+      const p = normalizePoll(m.poll);
+      if (p) m.poll = p; else delete m.poll;
+    }
+    if (recovered.length) {
+      this._recovered = (this._recovered ? this._recovered + '\n\n' : '') +
+        '쪽지·채팅 파일 일부가 손상되어 확인이 필요합니다:\n' + recovered.join('\n');
+    }
+  }
+
+  // ---------- 저장 ----------
+  _emptyDirty() {
+    return { main: false, all: false, messages: new Set(), roomMsgs: new Set() };
+  }
+
+  _hasDirty() {
+    const d = this._dirty;
+    return d.main || d.all || d.messages.size > 0 || d.roomMsgs.size > 0;
+  }
+
+  // 저장 예약. 인자 없음 = data.json(계정·공지·채팅방·설정 등), 'all' = 전부 다시 확인(바뀐 파일만 씀),
+  // 쪽지·채팅 객체 = 그 날짜 파일. 여러 개를 함께 넘길 수 있다. 예) this._saveSoon('main', m)
+  _saveSoon(...what) {
+    if (!what.length) what = ['main'];
+    for (const w of what) {
+      if (w === 'all') this._dirty.all = true;
+      else if (w === 'main') this._dirty.main = true;
+      else if (w && typeof w === 'object') this._dirty[w.roomId !== undefined ? 'roomMsgs' : 'messages'].add(dayKey(w.time));
+    }
+    this._sweepNeeded = true;
+    this._scheduleSave();
+  }
+
+  _scheduleSave() {
+    if (this._saveTimer || this._stopped) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      if (this._saving) { this._saveAgain = true; return; }
+      this._savePromise = this._saveAsync();
+    }, SAVE_DELAY);
+  }
+
+  // data.json 에 쓸 내용 (쪽지·채팅 목록 제외)
+  _mainText(db) {
+    const { messages, roomMsgs, ...main } = db;
+    return JSON.stringify({ storeVersion: STORE_VERSION, ...main });
+  }
+
+  _chunkFile(kind, key) {
+    return path.join(this.dataDir, CHUNK_DIRS[kind], key + '.json');
+  }
+
+  // 저장할 파일 목록: 바뀐 날짜(또는 전부)의 쪽지·채팅 파일, 마지막에 data.json
+  _saveJobs(d) {
+    const jobs = [];
+    for (const kind of Object.keys(CHUNK_DIRS)) {
+      const want = d.all ? null : d[kind]; // null = 전부
+      if (want && !want.size) continue;
+      const groups = new Map();
+      for (const m of this.db[kind]) {
+        const k = dayKey(m.time);
+        if (want && !want.has(k)) continue;
+        let g = groups.get(k);
+        if (!g) groups.set(k, (g = []));
+        g.push(m);
+      }
+      // 비게 된 날짜(회수·삭제·보관 기간 정리·채팅방 삭제) → 파일 지움
+      for (const k of (want || [...this._chunkHash[kind].keys()])) {
+        if (!groups.has(k) && this._chunkHash[kind].has(k)) jobs.push({ kind, key: k, items: null });
+      }
+      for (const [k, items] of groups) jobs.push({ kind, key: k, items });
+    }
+    if (d.all || d.main) jobs.push({ kind: 'main' });
+    return jobs;
+  }
+
+  // 파일 하나 반영 준비: 내용이 마지막으로 쓴 것과 같으면 null (쓰지 않음)
+  _prepareJob(job) {
+    if (job.kind === 'main') {
+      const text = this._mainText(this.db);
+      const hash = textHash(text);
+      return hash === this._mainHash ? null : { file: this.dbFile, text, hash };
+    }
+    const file = this._chunkFile(job.kind, job.key);
+    if (!job.items || !job.items.length) return { file, remove: true };
+    const text = JSON.stringify(job.items);
+    const hash = textHash(text);
+    return hash === this._chunkHash[job.kind].get(job.key) ? null : { file, text, hash };
+  }
+
+  _finishJob(job, w) {
+    if (job.kind === 'main') this._mainHash = w.hash;
+    else if (w.remove) this._chunkHash[job.kind].delete(job.key);
+    else this._chunkHash[job.kind].set(job.key, w.hash);
+  }
+
+  // 원자적 교체: 임시 파일을 디스크에 확실히 쓴 뒤, 직전 정상본은 .bak 으로 두고 바꿔 넣는다
+  // (쓰는 중 전원이 꺼져도 본 파일이나 .bak 중 하나는 온전 — 불러올 때 본 파일이 안 되면 .bak 사용)
+  _swapIn(file, tmp) {
+    try { fs.renameSync(file, file + '.bak'); } catch (e) {}
+    fs.renameSync(tmp, file);
+  }
+
+  _writeAtomicSync(file, text) {
+    const tmp = file + '.tmp-sync';
     const fd = fs.openSync(tmp, 'w');
     try {
-      fs.writeFileSync(fd, json);
-      fs.fsyncSync(fd);       // 디스크에 실제 기록되도록 강제
+      fs.writeFileSync(fd, text);
+      fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
     }
-    // 직전 정상본을 백업으로 남긴 뒤 교체
-    if (fs.existsSync(this.dbFile)) {
-      try { fs.copyFileSync(this.dbFile, this.dbFile + '.bak'); } catch (e) {}
+    this._swapIn(file, tmp);
+  }
+
+  _removeFile(file) {
+    for (const f of [file, file + '.bak']) { try { fs.unlinkSync(f); } catch (e) {} }
+  }
+
+  // 비동기 저장: 파일 쓰기·디스크 반영은 백그라운드에서, 파일 하나마다 다른 요청이 끼어들 수 있게 양보한다
+  async _saveAsync() {
+    if (this._saving) { this._saveAgain = true; return; }
+    if (!this._hasDirty()) return;
+    this._saving = true;
+    const d = this._dirty;
+    this._dirty = this._emptyDirty();
+    const gen = this._saveGen;
+    const started = Date.now();
+    let files = 0;
+    try {
+      for (const job of this._saveJobs(d)) {
+        if (gen !== this._saveGen) break;
+        const w = this._prepareJob(job);
+        if (w) {
+          if (w.remove) this._removeFile(w.file);
+          else {
+            const tmp = w.file + '.tmp-' + (++this._tmpSeq);
+            const fh = await fs.promises.open(tmp, 'w');
+            try {
+              await fh.writeFile(w.text);
+              await fh.sync();
+            } finally {
+              await fh.close();
+            }
+            if (gen !== this._saveGen) { fs.rm(tmp, { force: true }, () => {}); break; } // 그사이 동기 저장이 먼저 끝남
+            this._swapIn(w.file, tmp);
+          }
+          this._finishJob(job, w);
+          files++;
+        }
+        await new Promise(r => setImmediate(r));
+      }
+      this._noteSave(started, files);
+    } catch (e) {
+      console.error('DB 저장 실패:', e);
+      // 다음에 다시 시도 (바뀐 표시 되돌림)
+      if (d.all) this._dirty.all = true;
+      if (d.main) this._dirty.main = true;
+      for (const kind of Object.keys(CHUNK_DIRS)) for (const k of d[kind]) this._dirty[kind].add(k);
+      setTimeout(() => this._scheduleSave(), 5000);
+    } finally {
+      this._saving = false;
+      if (this._saveAgain || this._hasDirty()) { this._saveAgain = false; this._scheduleSave(); }
     }
-    fs.renameSync(tmp, this.dbFile);
   }
 
-  _saveSoon() {
-    if (this._saveTimer) return;
-    this._saveTimer = setTimeout(() => {
-      this._saveTimer = null;
-      try {
-        this._writeDb(this.db);
-      } catch (e) { console.error('DB 저장 실패:', e); }
-    }, 300);
+  _noteSave(started, files) {
+    const ms = Date.now() - started;
+    this.saveStats = { last: Date.now(), lastMs: ms, files, maxMs: Math.max(this.saveStats.maxMs, ms) };
   }
 
+  // 동기 저장 — 종료·백업·복원 직전에 사용. 바뀐 파일만 쓰지만 전부 확인한다
   saveNow() {
     if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; }
-    try { this._writeDb(this.db); } catch (e) { console.error('DB 저장 실패:', e); }
+    this._saveGen++;
+    const d = this._dirty;
+    this._dirty = this._emptyDirty();
+    d.all = true;
+    const started = Date.now();
+    let files = 0;
+    try {
+      for (const job of this._saveJobs(d)) {
+        const w = this._prepareJob(job);
+        if (!w) continue;
+        if (w.remove) this._removeFile(w.file);
+        else this._writeAtomicSync(w.file, w.text);
+        this._finishJob(job, w);
+        files++;
+      }
+      this._noteSave(started, files);
+    } catch (e) { console.error('DB 저장 실패:', e); this._dirty.all = true; }
+  }
+
+  // 빠뜨린 변경이 없는지 주기적으로 전부 확인 (바뀐 파일만 쓰므로 평소엔 거의 쓰지 않음)
+  _sweep() {
+    if (!this._sweepNeeded) return;
+    this._sweepNeeded = false;
+    this._dirty.all = true;
+    this._scheduleSave();
   }
 
   // ---------- 활동 로그 ----------
@@ -256,7 +512,20 @@ class MessengerServer {
     const d = new Date(entry.time);
     const p2 = (n) => String(n).padStart(2, '0');
     const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
-    try { fs.appendFileSync(this.logFile, `[${stamp}] ${entry.text}\n`); } catch (e) {}
+    // 백그라운드로 이어 쓴다 (동기로 쓰면 백신 검사 등으로 느려질 때 서버 전체가 멈칫함).
+    // 파일을 계속 열어 두지 않아 [로그 파일 열기]·메모장으로도 바로 볼 수 있다. 쓰는 중에 생긴 줄은 모아서 한 번에
+    this._logBuf.push(`[${stamp}] ${entry.text}\n`);
+    if (!this._logFlushing) this._flushLog();
+  }
+
+  async _flushLog() {
+    this._logFlushing = true;
+    while (this._logBuf.length) {
+      const chunk = this._logBuf.join('');
+      this._logBuf = [];
+      try { await fs.promises.appendFile(this.logFile, chunk); } catch (e) { console.error('활동 로그 기록 실패:', e.message); }
+    }
+    this._logFlushing = false;
   }
 
   getLogs() {
@@ -295,23 +564,46 @@ class MessengerServer {
       });
 
       // 파일 업로드: 원본 바이너리 body, ?name=파일명&token=로그인토큰
-      app.post('/upload', express.raw({ type: () => true, limit: MAX_UPLOAD }), (req, res) => {
+      // 받는 대로 디스크에 흘려 쓴다 — 예전처럼 메모리에 다 모은 뒤 한 번에 쓰면 큰 파일 하나에 메모리를 크게 쓰고
+      // 쓰는 동안 서버 전체가 멈췄다. 다 받은 뒤 이름을 바꿔 완성 (.part 는 정리 때 지워짐)
+      app.post('/upload', (req, res) => {
         const token = String(req.query.token || '');
         const userId = this.tokens.get(token);
-        if (!userId) return res.status(401).json({ error: '인증 실패' });
+        if (!userId) { req.resume(); return res.status(401).json({ error: '인증 실패' }); }
+        if (Number(req.headers['content-length'] || 0) > MAX_UPLOAD) {
+          req.resume();
+          return res.status(413).json({ error: '파일이 너무 큽니다 (최대 200MB)' });
+        }
         const name = path.basename(String(req.query.name || 'file')).slice(0, 200) || 'file';
         const fid = newId();
-        try {
-          fs.writeFileSync(path.join(this.uploadDir, fid), req.body);
-        } catch (e) {
-          return res.status(500).json({ error: '파일 저장 실패' });
-        }
-        this.log(`파일 업로드: ${name} (${Math.round(req.body.length / 1024)}KB) — ${this._userLabel(userId)}`);
-        res.json({
-          name,
-          size: req.body.length,
-          url: '/files/' + fid + '/' + encodeURIComponent(name)
+        const file = path.join(this.uploadDir, fid);
+        const part = file + '.part';
+        const out = fs.createWriteStream(part);
+        let size = 0, failed = false;
+        const fail = (status, error) => {
+          if (failed) return;
+          failed = true;
+          req.unpipe(out);
+          out.destroy();
+          fs.rm(part, { force: true }, () => {});
+          if (!res.headersSent) res.status(status).json({ error });
+          req.resume();
+        };
+        req.on('data', (chunk) => {
+          size += chunk.length;
+          if (size > MAX_UPLOAD) fail(413, '파일이 너무 큽니다 (최대 200MB)');
         });
+        req.on('close', () => { if (!req.complete) fail(400, '업로드가 중단되었습니다'); });
+        out.on('error', () => fail(500, '파일 저장 실패'));
+        out.on('finish', () => {
+          if (failed) return;
+          fs.rename(part, file, (err) => {
+            if (err) return fail(500, '파일 저장 실패');
+            this.log(`파일 업로드: ${name} (${Math.round(size / 1024)}KB) — ${this._userLabel(userId)}`);
+            res.json({ name, size, url: '/files/' + fid + '/' + encodeURIComponent(name) });
+          });
+        });
+        req.pipe(out);
       });
 
       // 설문 결과 엑셀(.xlsx) 내려받기 — 마감된 설문만, 볼 수 있는 사람만
@@ -368,6 +660,9 @@ class MessengerServer {
         // 예약 쪽지 발송(10초 주기) + 보관함 자동 정리(6시간 주기)
         this._schedTimer = setInterval(() => this._deliverDue(), 10000);
         this._cleanTimer = setInterval(() => this.cleanup(), 6 * 3600000);
+        this._sweepTimer = setInterval(() => this._sweep(), SWEEP_INTERVAL);
+        this._stopped = false;
+        if (this._hasDirty()) this._scheduleSave();
         this._deliverDue(); // 서버가 꺼져 있던 동안 밀린 예약 쪽지 즉시 발송
         this.log(`서버 시작 (포트 ${port})`);
         resolve(port);
@@ -375,11 +670,16 @@ class MessengerServer {
     });
   }
 
-  stop() {
+  async stop() {
+    if (this._schedTimer) { clearInterval(this._schedTimer); this._schedTimer = null; }
+    if (this._cleanTimer) { clearInterval(this._cleanTimer); this._cleanTimer = null; }
+    if (this._sweepTimer) { clearInterval(this._sweepTimer); this._sweepTimer = null; }
+    // 멈춘 뒤에는 저장을 예약하지 않는다 (복원 중인 파일을 덮어쓰지 않도록) — 진행 중이던 저장은 끝까지 기다린 뒤 한 번에 저장
+    this._stopped = true;
+    this._saveGen++;
+    if (this._savePromise) { try { await this._savePromise; } catch (e) {} }
+    this.saveNow();
     return new Promise((resolve) => {
-      if (this._schedTimer) { clearInterval(this._schedTimer); this._schedTimer = null; }
-      if (this._cleanTimer) { clearInterval(this._cleanTimer); this._cleanTimer = null; }
-      this.saveNow();
       for (const ws of this.sockets.values()) { try { ws.close(); } catch (e) {} }
       this.sockets.clear();
       this.tokens.clear();
@@ -482,6 +782,7 @@ class MessengerServer {
       if (n.poll && n.poll.deadline <= now && !n.poll.resultSent) {
         n.poll.resultSent = true;
         changed = true;
+        this._saveSoon();
         this.log(`설문 마감·결과 공개: "${n.title}" (참여 ${Object.keys(n.poll.votes || {}).length}명)`);
         this._broadcastNotice('notice_updated', n);
       }
@@ -490,11 +791,11 @@ class MessengerServer {
       if (m.poll && m.poll.deadline <= now && !m.poll.resultSent) {
         m.poll.resultSent = true;
         changed = true;
+        this._saveSoon(m);
         const room = this.db.rooms.find(r => r.id === m.roomId);
         if (room) this._sendRoomMsg(room, m, 'room_message_updated');
       }
     }
-    if (changed) this._saveSoon();
   }
 
   // 엑셀로 내보낼 설문 찾기 — 볼 수 있는 사람만, 마감된 설문만. 실패하면 status 가 붙은 Error
@@ -629,7 +930,7 @@ class MessengerServer {
     if (Date.now() >= m.poll.deadline) return;
     m.poll.deadline = Date.now();
     m.poll.resultSent = true;
-    this._saveSoon();
+    this._saveSoon(m);
     this.log(`채팅방 설문 조기 마감: "${m.poll.q}" — ${user.name} (${room.name})`);
     this._sendRoomMsg(room, m, 'room_message_updated');
   }
@@ -814,7 +1115,7 @@ class MessengerServer {
     if (everyone.every(uid => m.deletedBy.includes(uid))) {
       this.db.messages = this.db.messages.filter(x => x.id !== m.id);
     }
-    this._saveSoon();
+    this._saveSoon(m);
     this._send(ws, { type: 'message_deleted', messageId: msg.messageId });
   }
 
@@ -824,7 +1125,7 @@ class MessengerServer {
     if (idx < 0 || this.db.messages[idx].from !== ws.userId) return;
     const m = this.db.messages[idx];
     this.db.messages.splice(idx, 1);
-    this._saveSoon();
+    this._saveSoon(m);
     this.log(`쪽지 회수: ${this._userLabel(ws.userId)} → ${m.to.length}명` +
       (m.readBy.length ? ` (이미 읽은 사람 ${m.readBy.length}명)` : ''));
     this._send(ws, { type: 'recall_result', ok: true, messageId: m.id, readCount: m.readBy.length });
@@ -880,7 +1181,7 @@ class MessengerServer {
     if (style) m.style = style;
     if (html) m.html = html;
     this.db.messages.push(m);
-    this._saveSoon();
+    this._saveSoon(m);
     this.log(`쪽지 발송: ${this._userLabel(ws.userId)} → ${to.map(t => this._userLabel(t)).slice(0, 3).join(', ')}${to.length > 3 ? ` 외 ${to.length - 3}명` : ''}${attachments.length ? ` (첨부 ${attachments.length}개)` : ''}`);
     this._send(ws, { type: 'message_sent', message: m, clientRef: msg.clientRef });
     for (const rid of to) {
@@ -892,7 +1193,7 @@ class MessengerServer {
     const m = this.db.messages.find(x => x.id === msg.messageId);
     if (!m || !m.to.includes(ws.userId) || m.readBy.includes(ws.userId)) return;
     m.readBy.push(ws.userId);
-    this._saveSoon();
+    this._saveSoon(m);
     this._sendTo(m.from, { type: 'read_receipt', messageId: m.id, readerId: ws.userId });
   }
 
@@ -984,6 +1285,7 @@ class MessengerServer {
       if (s.style) m.style = s.style;
       if (s.html) m.html = s.html;
       this.db.messages.push(m);
+      this._saveSoon(m);
       for (const rid of to) {
         if (rid !== s.from) this._sendTo(rid, { type: 'new_message', message: m });
       }
@@ -1001,15 +1303,25 @@ class MessengerServer {
   }
 
   // ---------- 보관함 용량 관리 ----------
-  getStorage() {
-    let dbSize = 0;
-    try { dbSize = fs.statSync(this.dbFile).size; } catch (e) {}
-    let uploadsSize = 0, uploadsCount = 0;
-    try {
-      for (const f of fs.readdirSync(this.uploadDir)) {
-        try { uploadsSize += fs.statSync(path.join(this.uploadDir, f)).size; uploadsCount++; } catch (e) {}
+  // 파일 크기 집계는 비동기로 (첨부가 수천 개면 동기 집계가 서버를 멈춤)
+  async getStorage() {
+    const sizes = async (dir, filter) => {
+      let names = [];
+      try { names = (await fs.promises.readdir(dir)).filter(filter); } catch (e) { return { total: 0, count: 0 }; }
+      let total = 0, count = 0;
+      for (let i = 0; i < names.length; i += 100) {
+        const sts = await Promise.all(names.slice(i, i + 100).map(f => fs.promises.stat(path.join(dir, f)).catch(() => null)));
+        for (const st of sts) if (st && st.isFile()) { total += st.size; count++; }
       }
-    } catch (e) {}
+      return { total, count };
+    };
+    let dbSize = 0;
+    try { dbSize = (await fs.promises.stat(this.dbFile)).size; } catch (e) {}
+    for (const dir of Object.values(CHUNK_DIRS)) {
+      dbSize += (await sizes(path.join(this.dataDir, dir), f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))).total;
+    }
+    const up = await sizes(this.uploadDir, f => !f.endsWith('.part'));
+    const uploadsSize = up.total, uploadsCount = up.count;
     return {
       dbSize, uploadsSize, uploadsCount,
       messageCount: this.db.messages.length,
@@ -1072,7 +1384,7 @@ class MessengerServer {
         } catch (e) {}
       }
     } catch (e) {}
-    if (removedMessages || removedRoomMsgs) this._saveSoon();
+    if (removedMessages || removedRoomMsgs) this._saveSoon('all');
     if (removedMessages || removedRoomMsgs || removedFiles) {
       this.log(`보관함 정리: 쪽지 ${removedMessages}건, 채팅 ${removedRoomMsgs}건, 파일 ${removedFiles}개 삭제`);
     }
@@ -1100,6 +1412,7 @@ class MessengerServer {
   _pushRoomSystemMsg(room, text) {
     const m = { id: newId(), roomId: room.id, from: '', text, attachments: [], time: Date.now(), system: true };
     this.db.roomMsgs.push(m);
+    this._saveSoon(m);
     for (const uid of room.members) this._sendTo(uid, { type: 'room_message', message: m });
   }
 
@@ -1125,7 +1438,7 @@ class MessengerServer {
     if (!text.trim() && !attachments.length) return;
     const m = { id: newId(), roomId: room.id, from: ws.userId, text, attachments, time: Date.now() };
     this.db.roomMsgs.push(m);
-    this._saveSoon();
+    this._saveSoon(m);
     this._sendRoomMsg(room, m);
   }
 
@@ -1152,7 +1465,7 @@ class MessengerServer {
     if (text === m.text) return;
     m.text = text;
     m.edited = Date.now();
-    this._saveSoon();
+    this._saveSoon(m);
     this.log(`채팅방 글 수정: ${this._userLabel(ws.userId)} (${room.name})`);
     this._sendRoomMsg(room, m, 'room_message_updated');
   }
@@ -1167,7 +1480,7 @@ class MessengerServer {
     delete m.poll;
     delete m.edited;
     m.recalled = Date.now();
-    this._saveSoon();
+    this._saveSoon(m);
     this.log(`채팅방 글 회수: ${this._userLabel(ws.userId)} (${room.name})`);
     this._sendRoomMsg(room, m, 'room_message_updated');
   }
@@ -1186,7 +1499,7 @@ class MessengerServer {
       attachments: [], poll, time: Date.now()
     };
     this.db.roomMsgs.push(m);
-    this._saveSoon();
+    this._saveSoon(m);
     this.log(`채팅방 설문: "${poll.q}" — ${user ? user.name : ws.userId} (${room.name}, 대상 ${room.members.length}명)`);
     this._sendRoomMsg(room, m);
   }
@@ -1198,7 +1511,7 @@ class MessengerServer {
     if (!m || !m.poll) return;
     const error = this._applyVote(m.poll, ws.userId, msg.options);
     if (error) return this._send(ws, { type: 'error', error });
-    this._saveSoon();
+    this._saveSoon(m);
     this._sendRoomMsg(room, m, 'room_message_updated');
   }
 
@@ -1228,6 +1541,7 @@ class MessengerServer {
     this._sendTo(ws.userId, { type: 'room_removed', roomId: room.id });
     if (!room.members.length) {
       this.db.rooms = this.db.rooms.filter(r => r.id !== room.id);
+      for (const m of this.db.roomMsgs) if (m.roomId === room.id) this._saveSoon(m);
       this.db.roomMsgs = this.db.roomMsgs.filter(m => m.roomId !== room.id);
     } else {
       for (const uid of room.members) this._sendTo(uid, { type: 'room_updated', room });
@@ -1732,6 +2046,7 @@ class MessengerServer {
       room.members = room.members.filter(x => x !== id);
       if (!room.members.length) {
         this.db.rooms = this.db.rooms.filter(r => r.id !== room.id);
+        for (const m of this.db.roomMsgs) if (m.roomId === room.id) this._saveSoon(m);
         this.db.roomMsgs = this.db.roomMsgs.filter(m => m.roomId !== room.id);
       } else {
         for (const uid of room.members) this._sendTo(uid, { type: 'room_updated', room });

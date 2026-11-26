@@ -14,6 +14,9 @@ let settings = { port: 7777, schoolName: '', update: {} };
 let updater = null; // GitHub 자동 업데이트 관리
 let settingsFile = null;
 
+// 관리 화면은 단순해서 그래픽 가속이 필요 없다 — 끄면 GPU 프로세스가 없어져 메모리가 줄어든다 (메모리 4GB PC 대응)
+app.disableHardwareAcceleration();
+
 // 중복 실행 방지: 이미 실행 중이면 기존 창을 앞으로
 if (!app.requestSingleInstanceLock()) {
   app.exit(0);
@@ -50,10 +53,8 @@ function createWindow() {
   win.on('page-title-updated', (e) => e.preventDefault());
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
   win.webContents.on('did-finish-load', () => { if (win) win.setTitle(windowTitle()); });
-  // 창을 닫아도 서버는 트레이에서 계속 실행
-  win.on('close', (e) => {
-    if (!quitting) { e.preventDefault(); win.hide(); }
-  });
+  // 창을 닫아도 서버는 트레이에서 계속 실행. 창은 숨기지 않고 없애서 관리 화면이 쓰던 메모리를 돌려준다
+  // (다시 열면 새로 만든다 — 서버 자체는 메인 프로세스에서 계속 동작)
   win.on('closed', () => { win = null; });
 }
 
@@ -80,6 +81,24 @@ function createTray() {
   tray.on('double-click', showWindow);
 }
 
+function fixAutostartPath() {
+  // Electron 이 시작 프로그램에 쓰는 값 이름 = 'electron.app.' + 실행 파일의 제품 이름(= exe 이름).
+  // app.getName() 은 package.json 의 name(school-messenger-server)이라 다르다
+  const name = 'electron.app.' + path.basename(process.execPath, '.exe');
+  const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+  require('child_process').execFile('reg', ['query', key, '/v', name], { windowsHide: true }, (err, out) => {
+    if (err) return; // 자동 실행이 꺼져 있음 → 그대로 둔다
+    const m = /REG_SZ\s+(.+)$/m.exec(String(out));
+    if (!m) return;
+    const registered = m[1].trim().replace(/^"([^"]+)".*$/, '$1');
+    if (path.resolve(registered).toLowerCase() === path.resolve(process.execPath).toLowerCase()) return;
+    // 다른 곳에 제대로 설치된 서버라면 건드리지 않고, 빌드 폴더이거나 이미 없어진 위치일 때만 바로잡는다
+    if (fs.existsSync(registered) && !/[\\/]win-unpacked[\\/]/i.test(registered)) return;
+    app.setLoginItemSettings({ openAtLogin: true, name });
+    if (server) server.log(`자동 실행 경로 바로잡음: ${registered} → ${process.execPath}`);
+  });
+}
+
 function pushStatus() {
   if (win && !win.isDestroyed()) {
     win.webContents.send('status', server.getStatus());
@@ -90,11 +109,17 @@ function pushStatus() {
 app.whenReady().then(async () => {
   loadSettings();
   // 설치 후 첫 실행: Windows 시작 시 자동 실행 기본 켜기 (이후엔 사용자 설정 존중)
-  if (!settings.autostartInit && app.isPackaged) {
+  // 빌드 폴더(win-unpacked)에서 시험 삼아 켠 것은 등록하지 않는다 — 시작 프로그램이 그 폴더를 가리키게 되어
+  // 다시 빌드하면 엉뚱한(옛) 서버가 켜졌다
+  const installed = app.isPackaged && !/[\\/]win-unpacked[\\/]/i.test(process.execPath);
+  if (!settings.autostartInit && installed) {
     app.setLoginItemSettings({ openAtLogin: true });
     settings.autostartInit = true;
     saveSettings();
   }
+  // 자동 실행이 다른 위치(빌드 폴더·예전 설치 위치)의 서버로 등록돼 있으면 지금 설치된 서버로 바로잡는다
+  // (Electron 의 launchItems 는 경로가 다른 항목을 보여 주지 않아 레지스트리 값을 직접 읽는다)
+  if (installed && process.platform === 'win32') fixAutostartPath();
   // 데이터 저장 위치: 사용자가 변경한 경우 그 위치 사용
   let dataDir = path.join(app.getPath('userData'), 'serverdata');
   if (settings.dataDir) {

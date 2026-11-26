@@ -1,6 +1,14 @@
 'use strict';
 const $ = (s) => document.querySelector(s);
 
+// 주기적 새로고침 — 창이 최소화되었거나 뒤에 숨어 있으면 건너뛰고, 다시 보이면 바로 한 번 (서버 PC 부담 줄이기)
+const refreshers = [];
+function every(fn, ms) {
+  refreshers.push(fn);
+  setInterval(() => { if (!document.hidden) fn(); }, ms);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshers.forEach(fn => fn()); });
+
 // alert/confirm(네이티브 대화상자) 후 입력창 포커스가 깨지는 Electron 버그 우회
 {
   const _alert = window.alert.bind(window);
@@ -366,7 +374,7 @@ async function renderDeptOrder() {
   if (!ordered.length) box.innerHTML = '<div class="hint">등록된 사용자가 없습니다.</div>';
 }
 renderDeptOrder();
-setInterval(renderDeptOrder, 15000);
+every(renderDeptOrder, 15000);
 
 // ---------- 회원가입 요청 ----------
 function fmtLogTime(t) {
@@ -417,7 +425,7 @@ async function refreshSignups() {
   renderSignups(await window.api.getSignups());
 }
 refreshSignups();
-setInterval(refreshSignups, 5000);
+every(refreshSignups, 5000);
 
 // ---------- 활동 로그 ----------
 async function refreshLogs() {
@@ -429,7 +437,7 @@ async function refreshLogs() {
 $('#logRefreshBtn').addEventListener('click', refreshLogs);
 $('#logOpenBtn').addEventListener('click', () => window.api.openLog());
 refreshLogs();
-setInterval(refreshLogs, 10000);
+every(refreshLogs, 10000);
 
 // ---------- 프로그램 정보 ----------
 $('#aboutBtn').addEventListener('click', async () => {
@@ -525,7 +533,7 @@ $('#updRegisterBtn').addEventListener('click', async () => {
 });
 window.api.onUpdateState?.(renderUpdate);
 refreshUpdate();
-setInterval(refreshUpdate, 15000);
+every(refreshUpdate, 15000);
 
 // ---------- 학교 이름 ----------
 function applySchoolName(name) {
@@ -571,5 +579,5 @@ window.api.onUsers(renderUsers);
 window.api.getDataDir().then(d => { $('#dataDir').textContent = d; });
 refresh();
 refreshStorage();
-setInterval(refresh, 5000);
-setInterval(refreshStorage, 30000);
+every(refresh, 5000);
+every(refreshStorage, 30000);

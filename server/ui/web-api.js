@@ -114,7 +114,7 @@
     return name;
   }
 
-  const poll = (fn, cb, ms) => { setInterval(() => call(fn).then(cb).catch(() => {}), ms); };
+  const poll = (fn, cb, ms) => { setInterval(() => { if (!document.hidden) call(fn).then(cb).catch(() => {}); }, ms); };
   const names = ['getStatus', 'getUsers', 'getSettings', 'getDataDir', 'addUser', 'updateUser', 'deleteUser', 'resetPw',
     'bulkAdd', 'getAutostart', 'setAutostart', 'setSchoolName', 'getDeptOrder', 'getExtraDepts', 'setDeptOrder',
     'getSignups', 'approveSignup', 'rejectSignup', 'getLogs', 'backupExport', 'changeDataDir', 'getAppVersion',

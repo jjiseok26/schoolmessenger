@@ -7,9 +7,9 @@
 
 | 구분 | 폴더 | 설치파일 | 용도 |
 |------|------|----------|------|
-| 서버 (Windows) | `server/` | `SchoolMessenger-Server-Setup-1.0.0.exe` | 교내 서버 PC 1대에 설치 (계정 관리 포함) |
-| 서버 (Linux) | `server/` | `SchoolMessenger-Server-Linux-1.0.0.tar.gz` | 화면 없는 리눅스 서버에 설치, 관리는 웹 브라우저 (`http://서버주소:7777/admin`) |
-| 클라이언트 | `client/` | `SchoolMessenger-Client-Setup-1.0.0.exe` | 교직원 각자 PC에 설치 |
+| 서버 (Windows) | `server/` | `SchoolMessenger-Server-Setup-1.0.1.exe` | 교내 서버 PC 1대에 설치 (계정 관리 포함) |
+| 서버 (Linux) | `server/` | `SchoolMessenger-Server-Linux-1.0.1.tar.gz` | 화면 없는 리눅스 서버에 설치, 관리는 웹 브라우저 (`http://서버주소:7777/admin`) |
+| 클라이언트 | `client/` | `SchoolMessenger-Client-Setup-1.0.1.exe` | 교직원 각자 PC에 설치 |
 
 설치파일은 GitHub **[Releases](../../releases)** 에서 받을 수 있습니다. 서버는 둘 중 **하나만** 설치하면 됩니다.
 
@@ -80,6 +80,10 @@
 - **기타**: 트레이 상주, 다크 모드, 링크 클릭 시 브라우저로 열기, 학교 이름 표시, Windows 시작 시 자동 실행
 - **보안**: WebSocket 연결마다 ECDH 키 교환 + AES-256-GCM 으로 모든 메시지 암호화, 업데이트 파일은 크기·SHA-256 검증
 - **데이터 관리**(서버): 저장 용량 현황, 보관 기간(자동 정리), 백업 내보내기/복원, 데이터 저장 위치 변경, 활동 로그
+- **가벼운 서버 (1.0.1~)**: 쪽지·채팅을 날짜별 파일(`messages/`, `roommsgs/`)로 나눠 **바뀐 날짜만 백그라운드로 저장** — 데이터가 쌓여도 채팅·로그인 때 서버가 멈추지 않음
+  (한 학기 분량 시험 기준 저장 1회 멈춤 약 2초 → 0.02초, 채팅 왕복 최대 0.78초 → 0.01초). 첨부파일은 받는 대로 디스크에 써서 메모리를 아끼고,
+  관리 창을 닫으면 관리 화면이 쓰던 메모리도 돌려줌. 1.0.0 이하 데이터는 처음 실행 때 자동으로 옮김(`data.json.before-1.0.1` 로 원본 보관)
+- **빠른 클라이언트 (1.0.1~)**: 화면 밖 쪽지 목록은 그리지 않아 로그인·탭 전환이 빨라짐 (쪽지 500개 받은쪽지함 0.7초 → 0.08초)
 
 ## 설치 및 사용 방법
 
@@ -87,7 +91,7 @@
 
 ### 1. 서버 설치 — Windows (학교에서 1대만)
 
-1. 항상 켜져 있는 PC(교무실 등)에 `SchoolMessenger-Server-Setup-1.0.0.exe` 실행
+1. 항상 켜져 있는 PC(교무실 등)에 `SchoolMessenger-Server-Setup-1.0.1.exe` 실행
 2. 첫 실행 시 **학교 이름**을 입력합니다 (나중에 변경 가능)
 3. Windows 방화벽 허용 창이 뜨면 **허용**
 4. 관리 화면 [서버 상태]의 **접속 주소**(예: `10.112.120.40:7777`)를 교직원에게 알려 줍니다
@@ -100,7 +104,7 @@
 
 ```bash
 # Node.js 18 이상 필요 (node -v 로 확인)
-tar -xzf SchoolMessenger-Server-Linux-1.0.0.tar.gz
+tar -xzf SchoolMessenger-Server-Linux-1.0.1.tar.gz
 cd school-messenger-server
 sudo bash install.sh
 ```
@@ -110,7 +114,7 @@ sudo bash install.sh
 
 ### 2. 클라이언트 설치 (교직원 PC마다)
 
-1. `SchoolMessenger-Client-Setup-1.0.0.exe` 실행
+1. `SchoolMessenger-Client-Setup-1.0.1.exe` 실행
 2. 로그인 화면에 서버 관리 화면에 표시된 **서버 주소** 하나 입력 (예: `10.112.120.40:7777`)
 3. 서버에서 등록받은 아이디/비밀번호로 로그인 (계정이 없으면 [회원가입 요청] → 관리자 승인)
 

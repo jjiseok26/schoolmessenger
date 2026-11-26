@@ -59,23 +59,44 @@ function backupName(d = new Date()) {
   return `학교메신저-백업-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
 }
 
-// 백업: parentDir 아래에 날짜 이름 폴더를 만들어 data.json + uploads 복사 → 만든 폴더 경로
+// 1.0.1~ 쪽지·채팅은 날짜별 파일 폴더에 저장 (data.json 에는 계정·공지·채팅방·설정)
+const CHUNK_DIRS = ['messages', 'roommsgs'];
+
+// 날짜별 파일 폴더 복사 (.bak·임시 파일은 빼고 본 파일만)
+function copyChunks(srcDir, dstDir) {
+  for (const d of CHUNK_DIRS) {
+    const s = path.join(srcDir, d);
+    if (!fs.existsSync(s)) continue;
+    fs.mkdirSync(path.join(dstDir, d), { recursive: true });
+    for (const f of fs.readdirSync(s)) {
+      if (/^\d{4}-\d{2}-\d{2}\.json$/.test(f)) fs.copyFileSync(path.join(s, f), path.join(dstDir, d, f));
+    }
+  }
+}
+
+// 백업: parentDir 아래에 날짜 이름 폴더를 만들어 data.json + 날짜별 쪽지·채팅 + uploads 복사 → 만든 폴더 경로
 function backupTo(server, parentDir) {
   const dst = path.join(parentDir, backupName());
   server.saveNow();
   fs.mkdirSync(dst, { recursive: true });
   fs.copyFileSync(path.join(server.dataDir, 'data.json'), path.join(dst, 'data.json'));
+  copyChunks(server.dataDir, dst);
   if (fs.existsSync(server.uploadDir)) copyDirSync(server.uploadDir, path.join(dst, 'uploads'));
   server.log('백업 내보내기: ' + dst);
   return dst;
 }
 
-// 복원 (서버를 멈춘 뒤 호출) — 백업 폴더의 data.json + uploads 를 데이터 폴더로
+// 복원 (서버를 멈춘 뒤 호출) — 백업 폴더의 data.json + 날짜별 쪽지·채팅 + uploads 를 데이터 폴더로.
+// 지금 있는 날짜별 파일은 지운다 (남겨 두면 복원한 내용과 섞임). 예전(1.0.0 이하) 백업은 data.json 안에 쪽지가 모두 들어 있어
+// 다음 실행 때 자동으로 날짜별 파일로 옮겨진다.
 function restoreFrom(server, srcDir) {
   if (!fs.existsSync(path.join(srcDir, 'data.json'))) {
     throw new Error('선택한 폴더에 data.json이 없습니다. 백업 폴더를 선택하세요.');
   }
+  for (const d of CHUNK_DIRS) fs.rmSync(path.join(server.dataDir, d), { recursive: true, force: true });
+  fs.rmSync(path.join(server.dataDir, 'data.json.bak'), { force: true });
   fs.copyFileSync(path.join(srcDir, 'data.json'), path.join(server.dataDir, 'data.json'));
+  copyChunks(srcDir, server.dataDir);
   if (fs.existsSync(path.join(srcDir, 'uploads'))) copyDirSync(path.join(srcDir, 'uploads'), server.uploadDir);
 }
 

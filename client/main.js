@@ -153,8 +153,9 @@ app.whenReady().then(() => {
   loadSettings();
   setTimeout(cleanOldUpdateFiles, 15000); // 설치 프로그램이 완전히 끝난 뒤 정리
   // 설치 후 첫 실행: Windows 시작 시 자동 실행 기본 켜기 (이후엔 설정에서 변경 가능)
+  // (빌드 폴더 win-unpacked 에서 시험 삼아 켠 것은 등록하지 않음 — 시작 프로그램이 빌드 폴더를 가리키게 됨)
   const initFlag = path.join(app.getPath('userData'), '.autostart-init');
-  if (app.isPackaged && !fs.existsSync(initFlag)) {
+  if (app.isPackaged && !/[\\/]win-unpacked[\\/]/i.test(process.execPath) && !fs.existsSync(initFlag)) {
     app.setLoginItemSettings({ openAtLogin: true });
     try { fs.writeFileSync(initFlag, '1'); } catch (e) {}
   }

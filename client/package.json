@@ -1,6 +1,6 @@
 {
   "name": "school-messenger-client",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "학교 메신저 - 교직원용 메신저 클라이언트",
   "main": "main.js",
   "author": "School Messenger",
